@@ -1,0 +1,18 @@
+services:
+  blackbox-runner:
+    image: python:3.11-slim
+    working_dir: /workspace
+    entrypoint:
+      - python
+      - /workspace/tuner.py
+    volumes:
+      - ./:/workspace
+    networks:
+      - open-webui_default
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    restart: "no"
+
+networks:
+  open-webui_default:
+    external: true

@@ -1,0 +1,123 @@
+{
+  "model": {
+    "name": "qwen3-14b-style",
+    "backend": "llama_cpp_server",
+    "model_id": "qwen3:14b"
+  },
+  "backend": {
+    "type": "llama_cpp_server",
+    "api_base": "http://127.0.0.1:18081",
+    "health_path": "/health",
+    "completion_path": "/v1/completions",
+    "chat_completion_path": "/v1/chat/completions",
+    "api_mode": "chat",
+    "system_prompt": "Provide only the final answer. Do not reveal hidden reasoning or think aloud.",
+    "startup_timeout_sec": 180,
+    "request_timeout_sec": 300,
+    "container_name": "llama-cpp-tuner-qwen3-14b-style",
+    "network_name": "open-webui_default",
+    "image": "ghcr.io/ggml-org/llama.cpp:server-cuda",
+    "host_port": "18081",
+    "ollama_volume": "open-webui_ollama",
+    "model_path": "/root/.ollama/models/blobs/sha256-a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e",
+    "start_command": [
+      "docker",
+      "run",
+      "--rm",
+      "--name",
+      "{container_name}",
+      "--runtime",
+      "nvidia",
+      "--gpus",
+      "all",
+      "--network",
+      "{network_name}",
+      "-p",
+      "127.0.0.1:{host_port}:8080",
+      "-v",
+      "{ollama_volume}:/root/.ollama:ro",
+      "{image}",
+      "-m",
+      "{model_path}",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8080",
+      "--ctx-size",
+      "{context_size}",
+      "--n-gpu-layers",
+      "{gpu_layers}",
+      "--batch-size",
+      "{batch_size}",
+      "--ubatch-size",
+      "{micro_batch}",
+      "--cache-type-k",
+      "{kv_cache_type}",
+      "--cache-type-v",
+      "{kv_cache_type}",
+      "--flash-attn",
+      "{flash_attn_value}"
+    ],
+    "stop_command": [
+      "docker",
+      "rm",
+      "-f",
+      "{container_name}"
+    ]
+  },
+  "defaults": {
+    "gpu_layers": 24,
+    "context_size": 8192,
+    "batch_size": 512,
+    "micro_batch": 128,
+    "kv_cache_type": "q4_0",
+    "flash_attn": true,
+    "temperature": 0.6,
+    "top_p": 0.9,
+    "top_k": 40,
+    "min_p": 0.05,
+    "repeat_penalty": 1.05
+  },
+  "search": {
+    "temperature": [0.2, 0.4, 0.6, 0.8, 1.0],
+    "top_p": [0.8, 0.9, 0.95, 1.0],
+    "top_k": [20, 40, 80],
+    "min_p": [0.0, 0.05, 0.1],
+    "repeat_penalty": [1.0, 1.05, 1.1, 1.15]
+  },
+  "strategy": {
+    "mode": "coordinate",
+    "refinement_rounds": 1,
+    "stability_runs": 2,
+    "top_results": 8
+  },
+  "benchmark": {
+    "prompts_file": "..\\prompts\\qwen3-style-prompts.json",
+    "warmup_prompt": "Say 'ready' and nothing else.",
+    "warmup_max_tokens": 8
+  },
+  "monitoring": {
+    "nvidia_smi": "nvidia-smi",
+    "sample_interval_ms": 500,
+    "gpu_memory_soft_limit_mib": 15000
+  },
+  "scoring": {
+    "mode": "style",
+    "style_targets": {
+      "weirdness": 0.45,
+      "verbosity": 0.42,
+      "stiffness": 0.32
+    },
+    "style_weights": {
+      "weirdness": 1.0,
+      "verbosity": 1.0,
+      "stiffness": 1.2
+    },
+    "latency_weight": 0.02,
+    "failure_penalty": 1000.0,
+    "oom_penalty": 250.0
+  },
+  "output": {
+    "results_dir": "..\\results"
+  }
+}

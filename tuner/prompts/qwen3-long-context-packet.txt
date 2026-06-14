@@ -1,0 +1,57 @@
+Benchmark Packet: Single-Model Local Tuning Notes
+
+System summary:
+- GPU: RTX 4070 Ti Super, 16 GB VRAM
+- RAM: 64 GB DDR
+- Preferred KV baseline: fp4
+- Backends under test: ephemeral llama.cpp server, Ollama for comparison
+- Main rule: only one model loaded during tuning
+
+Run set A focused on context scaling. The baseline profile used 24 GPU layers, 8192 context, batch 512, micro-batch 128, fp4 KV, and flash attention enabled. At that baseline the operator observed strong prompt evaluation speed and stable decode speed across three short prompts. VRAM headroom was present but not abundant.
+
+The first context experiment raised context from 8192 to 16384 without changing any other parameter. Prompt evaluation slowed a little, but the system remained usable. The operator marked it as "acceptable for document work but not a free lunch." GPU memory usage climbed enough that later changes had less room to hide mistakes.
+
+The second context experiment kept context at 16384 and raised batch from 512 to 1024. That created the first clear throughput cliff. Prompt processing became inconsistent, generation stuttered, and the server occasionally paused between chunks even when the average decode rate looked respectable. Notes from the run say the machine "looked busy but felt sticky," which the operator used as shorthand for memory pressure plus scheduling overhead.
+
+Run set B focused on GPU layers. Lowering GPU layers from 24 to 16 reduced VRAM pressure but cost too much decode speed to be attractive for everyday use. Raising GPU layers from 24 to 32 improved some short generations, but once the longer prompt ran, temporary buffers and KV growth pushed the system close to the edge. The run did not fully crash, but it produced enough jitter that the operator called it brittle.
+
+Run set C focused on micro-batch size. Moving micro-batch from 128 down to 64 slightly improved stability at high context, but the benefit was modest when flash attention was already on. Pushing micro-batch to 256 looked strong at first on the shortest case, then regressed on the longer cases. The notes described it as "good benchmark theater, mediocre real use."
+
+Run set D compared KV cache types. fp4 remained the best default because it preserved room for layers and context at the same time. f16 looked clean and predictable but spent too much memory to be the universal choice on this system. q8_0 occasionally helped prompt quality on edge cases, yet it also tightened the VRAM envelope enough that the operator treated it as a special-purpose option rather than a default.
+
+Run set E isolated flash attention. With flash attention disabled, prompt evaluation time widened noticeably as context increased, and the longest retrieval prompt showed the worst drop. With flash attention enabled, the system stayed more even across prompt classes and the longer context run stopped feeling punishing. The operator wrote that flash attention should remain enabled unless a specific model proved incompatible.
+
+Three final profiles were recorded:
+
+Profile Ember:
+- GPU layers 16
+- Context 8192
+- Batch 512
+- Micro-batch 128
+- KV fp4
+- Flash attention on
+- Notes: safest on memory, clearly slower than the others
+
+Profile Harbor:
+- GPU layers 24
+- Context 8192
+- Batch 512
+- Micro-batch 128
+- KV fp4
+- Flash attention on
+- Notes: safest all-around recommendation, strong balance of speed and stability
+
+Profile Spire:
+- GPU layers 32
+- Context 16384
+- Batch 512
+- Micro-batch 64
+- KV fp4
+- Flash attention on
+- Notes: useful for long documents, but less forgiving and not the default choice
+
+Closing observations:
+1. The operator cared more about sustained smoothness than peak benchmark numbers.
+2. The first major throughput cliff appeared when batch was raised to 1024 while context stayed at 16384.
+3. Flash attention earned its keep most clearly on the long retrieval prompt, where disabled runs widened prompt evaluation time and made the system feel harsher to use.
+4. Harbor was the preferred general profile because it combined steady speed, predictable memory use, and low drama.

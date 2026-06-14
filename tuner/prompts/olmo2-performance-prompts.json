@@ -1,0 +1,27 @@
+[
+  {
+    "name": "creative_short",
+    "prompt": "Write me a poem about tea based on Ozymandias. Keep it to 14 lines and make it solemn rather than silly.",
+    "max_tokens": 176,
+    "temperature": 0.6,
+    "top_p": 0.9,
+    "repetitions": 1
+  },
+  {
+    "name": "structured_reasoning",
+    "prompt": "A local language model server became slower after the context window was increased from 8k to 32k. Give a numbered troubleshooting checklist that prioritizes likely causes, measurements to capture, and the order to test fixes.",
+    "max_tokens": 320,
+    "temperature": 0.0,
+    "repetitions": 1
+  },
+  {
+    "name": "long_context_retrieval",
+    "prompt_file": "qwen3-long-context-packet.txt",
+    "prompt_prefix": "Read the benchmark packet below. Then answer three questions in short labeled sections: 1. Which setting change caused the first major throughput cliff? 2. Which profile was the safest all-around recommendation? 3. Which observation most strongly argued for keeping flash attention enabled? Keep the answer under 220 words.\n\n--- BEGIN PACKET ---\n\n",
+    "prompt_suffix": "\n\n--- END PACKET ---",
+    "max_tokens": 220,
+    "temperature": 0.0,
+    "repetitions": 1,
+    "target_words": 170
+  }
+]

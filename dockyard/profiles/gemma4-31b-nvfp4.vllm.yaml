@@ -1,0 +1,41 @@
+id: gemma4-31b-nvfp4-vllm
+name: Gemma 4 31B NVFP4 vLLM
+version: 1
+model:
+  id: nvidia/Gemma-4-31B-IT-NVFP4
+  local_path: /mnt/Calliope/models/Gemma-4-31B-IT-NVFP4
+  source: huggingface-local
+  card_url: https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4
+  quant: nvfp4
+runtime:
+  backend: vllm
+  image: vllm/vllm-openai:v0.20.0
+  command: [vllm, serve]
+  args:
+    - /model
+    - --served-model-name
+    - gemma4_31b_nvfp4
+    - --host
+    - 0.0.0.0
+    - --port
+    - "8000"
+    - --trust-remote-code
+    - --quantization
+    - modelopt
+    - --max-model-len
+    - "32768"
+    - --gpu-memory-utilization
+    - "0.92"
+container:
+  name: dockyard-gemma4-31b-nvfp4
+  host_port: 18001
+  internal_port: 8000
+  gpu: all
+  shm_size: 16g
+  volumes:
+    - /mnt/Calliope/models/Gemma-4-31B-IT-NVFP4:/model:ro
+    - /mnt/Calliope/models/.cache/huggingface:/root/.cache/huggingface
+  env:
+    HF_HOME: /root/.cache/huggingface
+health:
+  url: http://127.0.0.1:18001/v1/models

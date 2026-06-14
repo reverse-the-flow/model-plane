@@ -1,0 +1,23 @@
+[
+  {
+    "name": "short_chat",
+    "prompt": "Explain why GPU layers, context size, batch size, and micro-batch interact in local LLM inference. Keep it concise and practical.",
+    "max_tokens": 192,
+    "temperature": 0.0,
+    "repetitions": 1
+  },
+  {
+    "name": "medium_reasoning",
+    "prompt": "Write a short troubleshooting checklist for a local language model server that becomes slower after increasing context size. Include likely causes and a step-by-step debug order.",
+    "max_tokens": 384,
+    "temperature": 0.0,
+    "repetitions": 1
+  },
+  {
+    "name": "longer_generation",
+    "prompt": "You are benchmarking a local model runner. Produce a structured report with sections for memory pressure, throughput cliffs, KV cache behavior, flash attention tradeoffs, and recommended safe defaults for a 16 GB VRAM system.",
+    "max_tokens": 512,
+    "temperature": 0.0,
+    "repetitions": 1
+  }
+]

@@ -1,0 +1,99 @@
+name: local-model-tuner-aitune-lab
+
+x-aitune-common: &aitune-common
+  image: ${AITUNE_BASE_IMAGE:-nvcr.io/nvidia/pytorch:25.02-py3}
+  working_dir: /workspace
+  entrypoint:
+    - /bin/bash
+    - /workspace/aitune-lab/scripts/aitune-entrypoint.sh
+  volumes:
+    - ./:/workspace
+  environment:
+    AITUNE_INSTALL_TARGET: ${AITUNE_INSTALL_TARGET:-git+https://github.com/ai-dynamo/aitune.git}
+    AITUNE_EXTRA_PIP_PACKAGES: ${AITUNE_EXTRA_PIP_PACKAGES:-}
+    AITUNE_BACKENDS: ${AITUNE_BACKENDS:-tensorrt,torch_inductor}
+    HF_HOME: /workspace/.cache/huggingface
+    HUGGINGFACE_HUB_CACHE: /workspace/.cache/huggingface
+    TRANSFORMERS_CACHE: /workspace/.cache/huggingface
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+  tty: true
+  stdin_open: true
+  restart: "no"
+  gpus: all
+
+services:
+  aitune-runner:
+    <<: *aitune-common
+    command:
+      - list-backends
+
+  aitune-backend-tensorrt:
+    <<: *aitune-common
+    environment:
+      AITUNE_INSTALL_TARGET: ${AITUNE_INSTALL_TARGET:-git+https://github.com/ai-dynamo/aitune.git}
+      AITUNE_EXTRA_PIP_PACKAGES: ${AITUNE_EXTRA_PIP_PACKAGES:-}
+      AITUNE_BACKENDS: tensorrt
+      HF_HOME: /workspace/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /workspace/.cache/huggingface
+      TRANSFORMERS_CACHE: /workspace/.cache/huggingface
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    command:
+      - probe-imports
+
+  aitune-backend-torch-tensorrt-jit:
+    <<: *aitune-common
+    environment:
+      AITUNE_INSTALL_TARGET: ${AITUNE_INSTALL_TARGET:-git+https://github.com/ai-dynamo/aitune.git}
+      AITUNE_EXTRA_PIP_PACKAGES: ${AITUNE_EXTRA_PIP_PACKAGES:-}
+      AITUNE_BACKENDS: torch_tensorrt_jit
+      HF_HOME: /workspace/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /workspace/.cache/huggingface
+      TRANSFORMERS_CACHE: /workspace/.cache/huggingface
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    command:
+      - probe-imports
+
+  aitune-backend-torch-tensorrt-aot:
+    <<: *aitune-common
+    environment:
+      AITUNE_INSTALL_TARGET: ${AITUNE_INSTALL_TARGET:-git+https://github.com/ai-dynamo/aitune.git}
+      AITUNE_EXTRA_PIP_PACKAGES: ${AITUNE_EXTRA_PIP_PACKAGES:-}
+      AITUNE_BACKENDS: torch_tensorrt_aot
+      HF_HOME: /workspace/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /workspace/.cache/huggingface
+      TRANSFORMERS_CACHE: /workspace/.cache/huggingface
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    command:
+      - probe-imports
+
+  aitune-backend-torchao:
+    <<: *aitune-common
+    environment:
+      AITUNE_INSTALL_TARGET: ${AITUNE_INSTALL_TARGET:-git+https://github.com/ai-dynamo/aitune.git}
+      AITUNE_EXTRA_PIP_PACKAGES: ${AITUNE_EXTRA_PIP_PACKAGES:-}
+      AITUNE_BACKENDS: torchao
+      HF_HOME: /workspace/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /workspace/.cache/huggingface
+      TRANSFORMERS_CACHE: /workspace/.cache/huggingface
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    command:
+      - probe-imports
+
+  aitune-backend-torch-inductor:
+    <<: *aitune-common
+    environment:
+      AITUNE_INSTALL_TARGET: ${AITUNE_INSTALL_TARGET:-git+https://github.com/ai-dynamo/aitune.git}
+      AITUNE_EXTRA_PIP_PACKAGES: ${AITUNE_EXTRA_PIP_PACKAGES:-}
+      AITUNE_BACKENDS: torch_inductor
+      HF_HOME: /workspace/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /workspace/.cache/huggingface
+      TRANSFORMERS_CACHE: /workspace/.cache/huggingface
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    command:
+      - probe-imports

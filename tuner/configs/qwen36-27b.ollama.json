@@ -1,0 +1,62 @@
+{
+  "model": {
+    "name": "qwen36-27b-ollama",
+    "backend": "ollama",
+    "model_id": "qwen3.6:27b"
+  },
+  "backend": {
+    "type": "ollama",
+    "api_base": "http://127.0.0.1:11434",
+    "request_timeout_sec": 480,
+    "keep_alive": "10m"
+  },
+  "defaults": {
+    "context_size": 16384,
+    "batch_size": 512,
+    "flash_attn": true
+  },
+  "search": {
+    "context_size": [
+      8192,
+      16384,
+      32768
+    ],
+    "batch_size": [
+      256,
+      512,
+      1024,
+      2048
+    ],
+    "flash_attn": [
+      true,
+      false
+    ]
+  },
+  "strategy": {
+    "mode": "coordinate",
+    "refinement_rounds": 1,
+    "stability_runs": 2,
+    "top_results": 5
+  },
+  "benchmark": {
+    "prompts_file": "../prompts/qwen3-performance-prompts.json",
+    "warmup_prompt": "Say 'ready' and nothing else.",
+    "warmup_max_tokens": 8
+  },
+  "monitoring": {
+    "nvidia_smi": "nvidia-smi",
+    "sample_interval_ms": 500,
+    "gpu_memory_soft_limit_mib": null
+  },
+  "scoring": {
+    "decode_weight": 1.0,
+    "prompt_weight": 0.2,
+    "total_weight": 0.05,
+    "failure_penalty": 1000.0,
+    "oom_penalty": 250.0,
+    "memory_pressure_penalty": 0.0
+  },
+  "output": {
+    "results_dir": "../results"
+  }
+}

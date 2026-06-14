@@ -1,0 +1,42 @@
+# Runtime and generated state
+state/
+generated/
+results/
+logs/
+*.log
+
+# Large/local model assets
+models/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+
+# Secrets and local environment
+.env
+.env.*
+*.pem
+*.key
+id_*
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/

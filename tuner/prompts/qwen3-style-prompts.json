@@ -1,0 +1,26 @@
+[
+  {
+    "name": "tea_poem",
+    "prompt": "/no_think\nWrite me a poem about tea based on Ozymandias. Keep it evocative, self-contained, and around 14 lines.",
+    "max_tokens": 176,
+    "think": false,
+    "temperature": 0.6,
+    "top_p": 0.9,
+    "repetitions": 1,
+    "target_words": 110
+  },
+  {
+    "name": "plainspoken_explainer",
+    "prompt": "Explain to a skeptical friend why tuning a local language model matters. Use two short paragraphs, stay concrete, and keep it under 130 words.",
+    "max_tokens": 180,
+    "repetitions": 1,
+    "target_words": 110
+  },
+  {
+    "name": "warm_announcement",
+    "prompt": "Write a short announcement for a small Discord server about finally finding stable settings for a local model. Make it upbeat but not salesy, and keep it to 4 to 6 sentences.",
+    "max_tokens": 180,
+    "repetitions": 1,
+    "target_words": 100
+  }
+]
