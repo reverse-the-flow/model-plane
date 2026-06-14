@@ -18,3 +18,20 @@ This is the sibling project to `../tuner`. It should manage model stack profiles
 - `notes/`: design notes and implementation planning.
 
 The exported planning note is `notes/model launcher control plane`.
+
+## MoE Probe Manifest
+
+Model Plane can export a compact JSON manifest for agents that need to plan a
+MoE Run Anyway probe without understanding the full Dockyard profile schema:
+
+```bash
+curl http://127.0.0.1:19110/profiles/llama-cpp-example/moe-probe-manifest \
+  -o moe-probe-manifest.json
+```
+
+The manifest includes the selected profile id, model id/path, backend family,
+base URL, health URL, optional log file path, container name, a primary probe
+hint, and safety notes. Stock `llama.cpp`, vLLM, Ollama, and other
+OpenAI-compatible backends are reported as runtime-observability paths; they do
+not expose semantic expert ids unless a profile explicitly declares a hookable
+local runtime.

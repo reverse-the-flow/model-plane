@@ -10,6 +10,8 @@ import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from .moe_probe_manifest import build_moe_probe_manifest
+
 ROOT = Path(__file__).resolve().parents[2]
 PROFILES = ROOT / "profiles"
 
@@ -127,6 +129,11 @@ def validate(profile_id: str) -> list[dict[str, str]]:
 def render(profile_id: str) -> dict[str, Any]:
     command = render_command(profile(profile_id))
     return {"profile_id": profile_id, "docker_command": command, "shell_command": shlex.join(command)}
+
+
+@app.get("/profiles/{profile_id}/moe-probe-manifest")
+def export_moe_probe_manifest(profile_id: str) -> dict[str, Any]:
+    return build_moe_probe_manifest(profile(profile_id))
 
 
 @app.post("/profiles/{profile_id}/health")
