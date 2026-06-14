@@ -16,8 +16,27 @@ This is the sibling project to `../tuner`. It should manage model stack profiles
 - `state/`: runtime state such as active runs and reserved ports.
 - `generated/`: generated Docker Compose files or rendered launch artifacts.
 - `notes/`: design notes and implementation planning.
+- `docs/`: durable operator and agent contracts.
 
 The exported planning note is `notes/model launcher control plane`.
+
+## Agent Orchestration Role
+
+Model Plane should be treated as a local orchestration/control layer for agents,
+with the human UI serving as a readable console for status and inspection. The
+durable bridge is machine-readable: profiles, validation messages, rendered
+launch commands, health checks, log references, and integration manifests should
+be available through backend endpoints or manifest fields so an agent does not
+ask the user to copy ports or endpoints between tools.
+
+The intended bridge flow is:
+
+```text
+profile -> validate -> launch/health/logs -> export MoE probe manifest -> MoE Run Anyway planner/probe
+```
+
+Read [docs/agent-orchestration-contract.md](docs/agent-orchestration-contract.md)
+for the current endpoint contract and safety boundaries.
 
 ## MoE Probe Manifest
 
