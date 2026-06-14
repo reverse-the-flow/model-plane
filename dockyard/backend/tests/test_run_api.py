@@ -43,10 +43,12 @@ class RunApiTests(unittest.TestCase):
     def test_backend_routes_include_run_surface(self) -> None:
         routes = {route.path for route in app_module.app.routes}
 
+        self.assertIn("/cleanup/plan", routes)
         self.assertIn("/runs", routes)
         self.assertIn("/runs/{run_id}", routes)
         self.assertIn("/runs/{run_id}/health", routes)
         self.assertIn("/runs/{run_id}/moe-probe-manifest", routes)
+        self.assertIn("/runs/{run_id}/cleanup", routes)
 
     def test_launch_records_failed_docker_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -110,6 +112,123 @@ class RunApiTests(unittest.TestCase):
             self.assertEqual(manifest["primary_probe_hint"], "runtime_baseline")
             self.assertEqual(manifest["semantic_expert_ids_status"], "not_exposed")
             self.assertIn("safety_notes", manifest)
+
+    def test_cleanup_plan_returns_failed_and_unhealthy_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runs_path = Path(temp_dir) / "runs.json"
+            with mock.patch.object(run_state, "RUNS_PATH", runs_path):
+                failed = run_state.create_run(profile_fixture(), ["docker", "run", "example"])
+                run_state.record_launch_result(failed["run_id"], 125, "", "docker failed")
+                unhealthy = run_state.create_run(profile_fixture(), ["docker", "run", "example"])
+                run_state.record_health_result(unhealthy["run_id"], {"ok": False, "error": "refused"})
+                healthy = run_state.create_run(profile_fixture(), ["docker", "run", "example"])
+                run_state.record_health_result(healthy["run_id"], {"ok": True, "status": 200})
+
+                plan = app_module.cleanup_plan(run_id=None)
+
+            candidates = {candidate["run_id"]: candidate for candidate in plan["candidates"]}
+            self.assertEqual(plan["schema_version"], "model-plane-cleanup-plan-v1")
+            self.assertIn(failed["run_id"], candidates)
+            self.assertIn(unhealthy["run_id"], candidates)
+            self.assertNotIn(healthy["run_id"], candidates)
+            self.assertEqual(candidates[failed["run_id"]]["profile_id"], "llama-local")
+            self.assertEqual(candidates[failed["run_id"]]["container_name"], "dockyard-llama-local")
+            self.assertEqual(candidates[failed["run_id"]]["health_url"], "http://127.0.0.1:18080/health")
+            self.assertIn("log_path", candidates[failed["run_id"]])
+            self.assertIn("launch_failed", candidates[failed["run_id"]]["candidate_reasons"])
+
+    def test_cleanup_plan_has_no_side_effects(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runs_path = Path(temp_dir) / "runs.json"
+            with mock.patch.object(run_state, "RUNS_PATH", runs_path):
+                failed = run_state.create_run(profile_fixture(), ["docker", "run", "example"])
+                run_state.record_launch_result(failed["run_id"], 125, "", "docker failed")
+                before = runs_path.read_text(encoding="utf-8")
+
+                with mock.patch.object(run_state, "write_store") as write_store:
+                    plan = app_module.cleanup_plan(run_id=None)
+
+                after = runs_path.read_text(encoding="utf-8")
+
+            self.assertEqual(plan["candidate_count"], 1)
+            write_store.assert_not_called()
+            self.assertEqual(after, before)
+
+    def test_cleanup_endpoint_records_review_only_cleanup_without_docker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runs_path = Path(temp_dir) / "runs.json"
+            with mock.patch.object(run_state, "RUNS_PATH", runs_path):
+                selected = run_state.create_run(profile_fixture(), ["docker", "run", "example"])
+
+                with mock.patch.object(app_module.subprocess, "run") as docker_run:
+                    response = app_module.cleanup_run(
+                        selected["run_id"],
+                        app_module.CleanupRequest(notes="reviewed stale launch"),
+                    )
+
+                persisted = run_state.get_run(selected["run_id"], runs_path)
+
+            docker_run.assert_not_called()
+            self.assertEqual(response["cleanup"]["action"], "reviewed")
+            self.assertFalse(response["cleanup"]["docker_called"])
+            self.assertEqual(persisted["cleanup_status"], "reviewed")
+            self.assertEqual(persisted["last_cleanup_result"]["notes"], "reviewed stale launch")
+
+    def test_cleanup_endpoint_calls_docker_rm_only_for_explicit_dockyard_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runs_path = Path(temp_dir) / "runs.json"
+            completed = subprocess.CompletedProcess(
+                args=["docker", "rm", "-f", "dockyard-llama-local"],
+                returncode=0,
+                stdout="removed",
+                stderr="",
+            )
+            with mock.patch.object(run_state, "RUNS_PATH", runs_path):
+                selected = run_state.create_run(profile_fixture(), ["docker", "run", "example"])
+
+                with mock.patch.object(app_module.subprocess, "run", return_value=completed) as docker_run:
+                    review = app_module.cleanup_run(selected["run_id"], app_module.CleanupRequest())
+                    removal = app_module.cleanup_run(
+                        selected["run_id"],
+                        app_module.CleanupRequest(remove_container=True, notes="remove concrete run"),
+                    )
+
+                persisted = run_state.get_run(selected["run_id"], runs_path)
+
+            self.assertFalse(review["cleanup"]["docker_called"])
+            docker_run.assert_called_once_with(
+                ["docker", "rm", "-f", "dockyard-llama-local"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(removal["cleanup"]["action"], "container_removed")
+            self.assertTrue(removal["cleanup"]["docker_called"])
+            self.assertEqual(persisted["last_cleanup_result"]["stdout"], "removed")
+
+    def test_cleanup_endpoint_refuses_non_dockyard_container_names(self) -> None:
+        unsafe_profile = profile_fixture()
+        unsafe_profile["container"] = dict(unsafe_profile["container"], name="production-model")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runs_path = Path(temp_dir) / "runs.json"
+            with mock.patch.object(run_state, "RUNS_PATH", runs_path):
+                selected = run_state.create_run(unsafe_profile, ["docker", "run", "example"])
+
+                with mock.patch.object(app_module.subprocess, "run") as docker_run:
+                    response = app_module.cleanup_run(
+                        selected["run_id"],
+                        app_module.CleanupRequest(remove_container=True, notes="try unsafe remove"),
+                    )
+
+                persisted = run_state.get_run(selected["run_id"], runs_path)
+
+            docker_run.assert_not_called()
+            self.assertEqual(response["cleanup"]["action"], "refused")
+            self.assertFalse(response["cleanup"]["docker_called"])
+            self.assertEqual(response["cleanup"]["container_name"], "production-model")
+            self.assertEqual(persisted["cleanup_status"], "refused")
+            self.assertIn("Refusing to remove", persisted["last_cleanup_result"]["reason"])
 
 
 if __name__ == "__main__":

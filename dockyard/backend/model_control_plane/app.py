@@ -3,12 +3,14 @@ from __future__ import annotations
 import shlex
 import subprocess
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from . import run_state
 from .moe_probe_manifest import build_moe_probe_manifest, build_run_moe_probe_manifest
@@ -23,6 +25,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+CLEANUP_CANDIDATE_STATUSES = {"launch_failed", "launch_error", "unhealthy"}
+DEFAULT_STALE_LAUNCHING_SECONDS = 30 * 60
+
+
+class CleanupRequest(BaseModel):
+    remove_container: bool = False
+    notes: str | None = None
 
 
 def profile_files() -> list[Path]:
@@ -137,12 +147,170 @@ def export_moe_probe_manifest(profile_id: str) -> dict[str, Any]:
     return build_moe_probe_manifest(profile(profile_id))
 
 
+@app.get("/cleanup/plan")
+def cleanup_plan(
+    run_id: list[str] | None = Query(default=None),
+    stale_launching_after_seconds: int = DEFAULT_STALE_LAUNCHING_SECONDS,
+) -> dict[str, Any]:
+    return build_cleanup_plan(run_state.list_runs(), run_id, stale_launching_after_seconds)
+
+
 def check_health_url(url: str) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(url, timeout=5) as response:
             return {"ok": 200 <= response.status < 300, "status": response.status}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
+
+def parse_utc_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def run_age_seconds(selected: dict[str, Any]) -> float | None:
+    timestamp = parse_utc_timestamp(selected.get("updated_at") or selected.get("created_at"))
+    if timestamp is None:
+        return None
+    return (datetime.now(timezone.utc) - timestamp).total_seconds()
+
+
+def cleanup_candidate_reasons(
+    selected: dict[str, Any],
+    explicit_run_ids: set[str],
+    stale_launching_after_seconds: int,
+) -> list[str]:
+    reasons: list[str] = []
+    run_id = str(selected.get("run_id") or "")
+    status = str(selected.get("status") or "")
+    if status in CLEANUP_CANDIDATE_STATUSES:
+        reasons.append(status)
+    if status == "launching":
+        age = run_age_seconds(selected)
+        if age is None:
+            reasons.append("launching_without_timestamp")
+        elif age >= stale_launching_after_seconds:
+            reasons.append(f"stale_launching:{int(age)}s")
+    if run_id in explicit_run_ids:
+        reasons.append("explicitly_requested")
+    return reasons
+
+
+def cleanup_action_notes(selected: dict[str, Any], reasons: list[str]) -> list[str]:
+    notes = ["Review the run state and record cleanup notes before taking action."]
+    container_name = str(selected.get("container_name") or "")
+    if container_name.startswith("dockyard-"):
+        notes.append("Container removal is available only through run-scoped cleanup with remove_container=true.")
+    elif container_name:
+        notes.append("Container removal will be refused because the run container name is not dockyard-scoped.")
+    else:
+        notes.append("No concrete container name is recorded; cleanup can only record review notes.")
+    if any(reason.startswith("stale_launching") for reason in reasons):
+        notes.append("Launching state is stale; verify whether Docker ever created a runtime container.")
+    return notes
+
+
+def cleanup_plan_candidate(selected: dict[str, Any], reasons: list[str]) -> dict[str, Any]:
+    container_name = selected.get("container_name")
+    return {
+        "run_id": selected.get("run_id"),
+        "profile_id": selected.get("profile_id"),
+        "status": selected.get("status"),
+        "container_name": container_name,
+        "health_url": selected.get("health_url"),
+        "log_path": selected.get("log_file_path"),
+        "candidate_reasons": reasons,
+        "proposed_actions": [
+            {
+                "action": "record_cleanup_review",
+                "docker_called": False,
+                "notes": "POST /runs/{run_id}/cleanup without remove_container to record review notes.",
+            },
+            {
+                "action": "remove_run_container",
+                "docker_called": bool(container_name and str(container_name).startswith("dockyard-")),
+                "notes": "POST /runs/{run_id}/cleanup with remove_container=true; only dockyard-* names are eligible.",
+            },
+        ],
+        "action_notes": cleanup_action_notes(selected, reasons),
+    }
+
+
+def build_cleanup_plan(
+    selected_runs: list[dict[str, Any]],
+    requested_run_ids: list[str] | None = None,
+    stale_launching_after_seconds: int = DEFAULT_STALE_LAUNCHING_SECONDS,
+) -> dict[str, Any]:
+    explicit_run_ids = set(requested_run_ids or [])
+    seen_run_ids = {str(selected.get("run_id") or "") for selected in selected_runs}
+    candidates = []
+    for selected in selected_runs:
+        reasons = cleanup_candidate_reasons(selected, explicit_run_ids, stale_launching_after_seconds)
+        if reasons:
+            candidates.append(cleanup_plan_candidate(selected, reasons))
+    return {
+        "schema_version": "model-plane-cleanup-plan-v1",
+        "generated_at": run_state.utc_now(),
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+        "missing_run_ids": sorted(run_id for run_id in explicit_run_ids if run_id not in seen_run_ids),
+        "safety_notes": [
+            "Cleanup planning is read-only and does not call Docker.",
+            "Cleanup execution is run-scoped and never calls broad Docker prune.",
+            "Container removal is only attempted for explicit cleanup requests on dockyard-* container names.",
+        ],
+    }
+
+
+def cleanup_refusal_result(selected: dict[str, Any], request: CleanupRequest, reason: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "action": "refused",
+        "reason": reason,
+        "requested_remove_container": request.remove_container,
+        "docker_called": False,
+        "container_name": selected.get("container_name"),
+        "notes": request.notes,
+    }
+
+
+def cleanup_review_result(selected: dict[str, Any], request: CleanupRequest) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "action": "reviewed",
+        "requested_remove_container": False,
+        "docker_called": False,
+        "container_name": selected.get("container_name"),
+        "notes": request.notes,
+    }
+
+
+def cleanup_remove_container_result(selected: dict[str, Any], request: CleanupRequest) -> dict[str, Any]:
+    container_name = str(selected.get("container_name") or "")
+    if not container_name:
+        return cleanup_refusal_result(selected, request, "Run does not record a concrete container name.")
+    if not container_name.startswith("dockyard-"):
+        return cleanup_refusal_result(
+            selected,
+            request,
+            "Refusing to remove containers not created by Dockyard.",
+        )
+    result = subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True, timeout=30, check=False)
+    return {
+        "ok": result.returncode == 0,
+        "action": "container_removed" if result.returncode == 0 else "container_remove_failed",
+        "requested_remove_container": True,
+        "docker_called": True,
+        "container_name": container_name,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "notes": request.notes,
+    }
 
 
 @app.post("/profiles/{profile_id}/health")
@@ -216,6 +384,21 @@ def export_run_moe_probe_manifest(run_id: str) -> dict[str, Any]:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Run profile not found") from exc
     return build_run_moe_probe_manifest(selected_profile, selected)
+
+
+@app.post("/runs/{run_id}/cleanup")
+def cleanup_run(run_id: str, request: CleanupRequest | None = None) -> dict[str, Any]:
+    selected = run(run_id)
+    cleanup_request = request or CleanupRequest()
+    result = (
+        cleanup_remove_container_result(selected, cleanup_request)
+        if cleanup_request.remove_container
+        else cleanup_review_result(selected, cleanup_request)
+    )
+    updated = run_state.record_cleanup_result(run_id, result)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {"cleanup": updated["last_cleanup_result"], "run": updated}
 
 
 @app.post("/containers/{container_name}/stop")

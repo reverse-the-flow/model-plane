@@ -69,6 +69,24 @@ class RunStateTests(unittest.TestCase):
             self.assertEqual(persisted["last_health_result"]["error"], "refused")
             self.assertIn("checked_at", persisted["last_health_result"])
 
+    def test_cleanup_result_is_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "runs.json"
+            run = run_state.create_run(profile_fixture(), ["docker", "run", "example"], path)
+
+            updated = run_state.record_cleanup_result(
+                run["run_id"],
+                {"ok": True, "action": "reviewed", "notes": "operator reviewed"},
+                path,
+            )
+
+            self.assertIsNotNone(updated)
+            persisted = run_state.get_run(run["run_id"], path)
+            self.assertEqual(persisted["cleanup_status"], "reviewed")
+            self.assertEqual(persisted["last_cleanup_result"]["notes"], "operator reviewed")
+            self.assertEqual(persisted["cleanup_history"][0]["action"], "reviewed")
+            self.assertIn("recorded_at", persisted["last_cleanup_result"])
+
 
 if __name__ == "__main__":
     unittest.main()

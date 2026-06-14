@@ -32,7 +32,7 @@ ask the user to copy ports or endpoints between tools.
 The intended bridge flow is:
 
 ```text
-profile -> launch -> run id -> health/logs/state -> export MoE probe manifest -> MoE Run Anyway planner/probe
+profile -> launch -> run id -> health/logs/state -> export MoE probe manifest -> cleanup plan -> cleanup action
 ```
 
 Read [docs/agent-orchestration-contract.md](docs/agent-orchestration-contract.md)
@@ -67,6 +67,33 @@ name, latest health result, a primary probe hint, and safety notes. Stock
 OpenAI-compatible backends are reported as runtime-observability paths; they do
 not expose semantic expert ids unless a profile explicitly declares a hookable
 local runtime.
+
+## Cleanup Planning
+
+Agents should ask for a dry-run cleanup plan before taking cleanup action:
+
+```bash
+curl http://127.0.0.1:19110/cleanup/plan
+```
+
+The plan lists failed, errored, unhealthy, stale launching, and explicitly
+requested runs with proposed actions. It has no side effects. Run-scoped cleanup
+records review notes by default:
+
+```bash
+curl -X POST http://127.0.0.1:19110/runs/run-.../cleanup \
+  -H 'content-type: application/json' \
+  -d '{"notes":"reviewed failed launch"}'
+```
+
+Container removal must be explicit and remains limited to the concrete container
+name recorded on the run when that name starts with `dockyard-`:
+
+```bash
+curl -X POST http://127.0.0.1:19110/runs/run-.../cleanup \
+  -H 'content-type: application/json' \
+  -d '{"remove_container":true,"notes":"remove failed launch container"}'
+```
 
 ## Manual Boundaries
 

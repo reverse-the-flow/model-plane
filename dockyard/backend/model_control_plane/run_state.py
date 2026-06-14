@@ -193,3 +193,22 @@ def record_health_result(run_id: str, result: dict[str, Any], path: Path | None 
     run["last_health_result"] = checked
     run["status"] = "healthy" if checked.get("ok") is True else "unhealthy"
     return save_run(run, path)
+
+
+def record_cleanup_result(run_id: str, result: dict[str, Any], path: Path | None = None) -> dict[str, Any] | None:
+    run = get_run(run_id, path)
+    if run is None:
+        return None
+    recorded = dict(result)
+    recorded_at = utc_now()
+    recorded["recorded_at"] = recorded_at
+    history = run.get("cleanup_history")
+    if not isinstance(history, list):
+        history = []
+    history.append(recorded)
+    run["updated_at"] = recorded_at
+    run["cleanup_reviewed_at"] = recorded_at
+    run["cleanup_status"] = recorded.get("action")
+    run["last_cleanup_result"] = recorded
+    run["cleanup_history"] = history
+    return save_run(run, path)

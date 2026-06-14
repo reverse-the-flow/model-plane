@@ -7,7 +7,7 @@ API an agent can call without moving endpoint details by hand.
 The control loop is:
 
 ```text
-profile -> launch -> run id -> health/logs/state -> export MoE probe manifest -> MoE Run Anyway planner/probe
+profile -> launch -> run id -> health/logs/state -> export MoE probe manifest -> cleanup plan -> cleanup action
 ```
 
 The console should make this loop readable. The API should make it operable.
@@ -26,6 +26,9 @@ An agent may:
 - export a run-scoped MoE probe manifest for MoE Run Anyway
 - hand the manifest to the MoE Run Anyway planner instead of asking the user to
   copy base URLs, ports, model ids, or log paths manually
+- ask Model Plane for a dry-run cleanup plan before changing any runtime state
+- record run-scoped cleanup review notes, or explicitly request removal of only
+  the concrete `dockyard-*` container recorded on a run
 
 An agent must not treat the human UI as the source of truth. The UI is a status
 and inspection surface over the profile and runtime state.
@@ -43,10 +46,12 @@ The backend surface is enough for the run-state MoE bridge:
 | `POST /profiles/{profile_id}/launch` | Create a persisted run record, then launch the rendered runtime command. | Starts Docker only when explicitly called. Failed Docker commands still leave an inspectable run id. |
 | `POST /profiles/{profile_id}/health` | Probe the configured health URL. | Sends a health request only. |
 | `GET /profiles/{profile_id}/moe-probe-manifest` | Export a pre-launch MoE Run Anyway bridge manifest. | Reads profile data only. |
+| `GET /cleanup/plan` | List cleanup candidates and proposed run-scoped actions. | Reads `state/runs.json`; no Docker calls or state writes. |
 | `GET /runs` | List persisted run records. | Reads `state/runs.json`. |
 | `GET /runs/{run_id}` | Inspect one persisted run record. | Reads `state/runs.json`. |
 | `POST /runs/{run_id}/health` | Probe the run's explicit health URL and persist the result. | Sends a health request only. |
 | `GET /runs/{run_id}/moe-probe-manifest` | Export the MoE Run Anyway bridge manifest for one concrete run. | Reads run state and profile data only. |
+| `POST /runs/{run_id}/cleanup` | Persist cleanup review metadata and optionally remove the run's concrete container. | Calls `docker rm -f` only when `remove_container=true` and the recorded container name starts with `dockyard-`. |
 | `POST /containers/{container_name}/stop` | Stop a Dockyard-managed container. | Stops containers whose names start with `dockyard-`. |
 
 The run-scoped manifest endpoint is the preferred integration point for MoE Run
@@ -66,11 +71,36 @@ Run state is persisted in `dockyard/state/runs.json` with schema version
   `launch_stdout`, and `launch_stderr`
 - grouped `launch` details for human inspection
 - `last_health_result` after `POST /runs/{run_id}/health`
+- `last_cleanup_result`, `cleanup_status`, `cleanup_reviewed_at`, and
+  `cleanup_history` after `POST /runs/{run_id}/cleanup`
 
 `POST /profiles/{profile_id}/launch` creates the run record before Docker is
 called. If Docker exits nonzero, the run status becomes `launch_failed` and the
 return code/stdout/stderr remain durable. If the health endpoint is checked, the
 run status becomes `healthy` or `unhealthy` based on that explicit result.
+
+## Cleanup Planning And Action
+
+Cleanup is a safe orchestration primitive, not a broad Docker maintenance
+operation. Agents should call `GET /cleanup/plan` before requesting any cleanup
+action. The plan is a dry run: it lists candidate runs, candidate reasons, the
+run id, profile id, status, container name, health URL, log path, proposed
+actions, and action notes without writing state or calling Docker.
+
+Current cleanup candidates include:
+
+- `launch_failed`
+- `launch_error`
+- `unhealthy`
+- stale `launching`
+- run ids explicitly passed to `GET /cleanup/plan?run_id=...`
+
+`POST /runs/{run_id}/cleanup` is the run-scoped execution surface. Without
+`remove_container=true`, it records review metadata and notes only. With
+`remove_container=true`, it may call `docker rm -f` for the single container name
+stored on that run, and only if that name starts with `dockyard-`. Non-Dockyard
+container names are recorded as refused cleanup results. Cleanup never calls
+Docker prune and does not delete run records.
 
 ## MoE Probe Manifest Fields
 
