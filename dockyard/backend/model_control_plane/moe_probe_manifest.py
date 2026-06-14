@@ -95,3 +95,37 @@ def build_moe_probe_manifest(profile: dict[str, Any]) -> dict[str, Any]:
             "Use the hookable PyTorch path only when hookable_runtime_available is true and router outputs are exposed locally.",
         ],
     }
+
+
+def build_run_moe_probe_manifest(profile: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
+    manifest = build_moe_probe_manifest(profile)
+    latest_health = run.get("last_health_result")
+    manifest.update(
+        {
+            "run_id": run.get("run_id"),
+            "profile_id": run.get("profile_id") or manifest.get("profile_id"),
+            "profile_name": run.get("profile_name") or manifest.get("profile_name"),
+            "model_id": run.get("model_id") or manifest.get("model_id"),
+            "model_path": run.get("model_path") or manifest.get("model_path"),
+            "backend_family": run.get("backend_family") or manifest.get("backend_family"),
+            "base_url": run.get("base_url") or manifest.get("base_url"),
+            "health_url": run.get("health_url") or manifest.get("health_url"),
+            "container_name": run.get("container_name") or manifest.get("container_name"),
+            "log_file_path": run.get("log_file_path") or manifest.get("log_file_path"),
+            "primary_probe_hint": run.get("primary_probe_hint") or manifest.get("primary_probe_hint"),
+            "semantic_expert_ids": run.get("semantic_expert_ids") or manifest.get("semantic_expert_ids"),
+            "semantic_expert_ids_status": run.get("semantic_expert_ids") or manifest.get("semantic_expert_ids"),
+            "latest_health_result": latest_health,
+            "run_status": run.get("status"),
+            "run_created_at": run.get("created_at"),
+            "run_updated_at": run.get("updated_at"),
+            "launch": {
+                "command": run.get("launch_command"),
+                "shell_command": run.get("launch_shell_command"),
+                "returncode": run.get("launch_returncode"),
+                "stdout": run.get("launch_stdout"),
+                "stderr": run.get("launch_stderr"),
+            },
+        }
+    )
+    return manifest

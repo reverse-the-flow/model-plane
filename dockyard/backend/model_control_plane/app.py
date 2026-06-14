@@ -10,7 +10,8 @@ import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from .moe_probe_manifest import build_moe_probe_manifest
+from . import run_state
+from .moe_probe_manifest import build_moe_probe_manifest, build_run_moe_probe_manifest
 
 ROOT = Path(__file__).resolve().parents[2]
 PROFILES = ROOT / "profiles"
@@ -136,14 +137,18 @@ def export_moe_probe_manifest(profile_id: str) -> dict[str, Any]:
     return build_moe_probe_manifest(profile(profile_id))
 
 
-@app.post("/profiles/{profile_id}/health")
-def check_profile_health(profile_id: str) -> dict[str, Any]:
-    url = profile(profile_id)["health"]["url"]
+def check_health_url(url: str) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(url, timeout=5) as response:
             return {"ok": 200 <= response.status < 300, "status": response.status}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
+
+@app.post("/profiles/{profile_id}/health")
+def check_profile_health(profile_id: str) -> dict[str, Any]:
+    url = profile(profile_id)["health"]["url"]
+    return check_health_url(url)
 
 
 @app.post("/profiles/{profile_id}/launch")
@@ -153,8 +158,64 @@ def launch(profile_id: str) -> dict[str, Any]:
     if errors:
         raise HTTPException(status_code=400, detail=errors)
     command = render_command(selected)
-    result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
-    return {"ok": result.returncode == 0, "returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+    run = run_state.create_run(selected, command)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+    except Exception as exc:
+        run = run_state.record_launch_exception(run["run_id"], str(exc)) or run
+        return {
+            "ok": False,
+            "run_id": run["run_id"],
+            "returncode": None,
+            "stdout": None,
+            "stderr": str(exc),
+            "run": run,
+        }
+    run = run_state.record_launch_result(run["run_id"], result.returncode, result.stdout, result.stderr) or run
+    return {
+        "ok": result.returncode == 0,
+        "run_id": run["run_id"],
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "run": run,
+    }
+
+
+@app.get("/runs")
+def runs() -> list[dict[str, Any]]:
+    return run_state.list_runs()
+
+
+@app.get("/runs/{run_id}")
+def run(run_id: str) -> dict[str, Any]:
+    selected = run_state.get_run(run_id)
+    if selected is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return selected
+
+
+@app.post("/runs/{run_id}/health")
+def check_run_health(run_id: str) -> dict[str, Any]:
+    selected = run(run_id)
+    health_url = selected.get("health_url")
+    if not health_url:
+        raise HTTPException(status_code=400, detail="Run does not have a health URL.")
+    result = check_health_url(str(health_url))
+    updated = run_state.record_health_result(run_id, result)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return updated["last_health_result"]
+
+
+@app.get("/runs/{run_id}/moe-probe-manifest")
+def export_run_moe_probe_manifest(run_id: str) -> dict[str, Any]:
+    selected = run(run_id)
+    try:
+        selected_profile = load_profile(str(selected["profile_id"]))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Run profile not found") from exc
+    return build_run_moe_probe_manifest(selected_profile, selected)
 
 
 @app.post("/containers/{container_name}/stop")

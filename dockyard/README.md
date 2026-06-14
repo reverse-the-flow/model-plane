@@ -32,7 +32,7 @@ ask the user to copy ports or endpoints between tools.
 The intended bridge flow is:
 
 ```text
-profile -> validate -> launch/health/logs -> export MoE probe manifest -> MoE Run Anyway planner/probe
+profile -> launch -> run id -> health/logs/state -> export MoE probe manifest -> MoE Run Anyway planner/probe
 ```
 
 Read [docs/agent-orchestration-contract.md](docs/agent-orchestration-contract.md)
@@ -41,16 +41,37 @@ for the current endpoint contract and safety boundaries.
 ## MoE Probe Manifest
 
 Model Plane can export a compact JSON manifest for agents that need to plan a
-MoE Run Anyway probe without understanding the full Dockyard profile schema:
+MoE Run Anyway probe without understanding the full Dockyard profile schema.
+The profile-level endpoint remains available for planning before launch:
 
 ```bash
 curl http://127.0.0.1:19110/profiles/llama-cpp-example/moe-probe-manifest \
   -o moe-probe-manifest.json
 ```
 
-The manifest includes the selected profile id, model id/path, backend family,
-base URL, health URL, optional log file path, container name, a primary probe
-hint, and safety notes. Stock `llama.cpp`, vLLM, Ollama, and other
+After launch, agents should prefer the run-scoped manifest so downstream tools
+receive the exact run id, launch result, health result, container name, endpoint,
+and log reference:
+
+```bash
+curl http://127.0.0.1:19110/runs/run-.../moe-probe-manifest \
+  -o moe-probe-manifest.json
+```
+
+Run state is persisted in `dockyard/state/runs.json`. Launch attempts are
+recorded before Docker is called, so failed Docker commands still produce an
+inspectable run id. The manifest includes the selected profile id, run id, model
+id/path, backend family, base URL, health URL, optional log file path, container
+name, latest health result, a primary probe hint, and safety notes. Stock
+`llama.cpp`, vLLM, Ollama, and other
 OpenAI-compatible backends are reported as runtime-observability paths; they do
 not expose semantic expert ids unless a profile explicitly declares a hookable
 local runtime.
+
+## Manual Boundaries
+
+Agents can list runs, inspect run state, check an explicit health URL, and export
+run manifests. Starting a local runtime remains an intentional launch action, and
+Model Plane still only stops containers whose names start with `dockyard-`.
+Model Plane does not download models, inspect private tokens, start unrelated
+services, or send prompt traffic as part of manifest export or health checks.

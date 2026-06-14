@@ -7,7 +7,7 @@ API an agent can call without moving endpoint details by hand.
 The control loop is:
 
 ```text
-profile -> validate -> launch/health/logs -> export MoE probe manifest -> MoE Run Anyway planner/probe
+profile -> launch -> run id -> health/logs/state -> export MoE probe manifest -> MoE Run Anyway planner/probe
 ```
 
 The console should make this loop readable. The API should make it operable.
@@ -20,9 +20,10 @@ An agent may:
 - validate the selected profile before launch
 - render a launch command for review or execution by the control layer
 - call launch only when the user has authorized starting a local runtime
-- check profile health through the configured health URL
-- pass along profile log references when they exist
-- export a MoE probe manifest for MoE Run Anyway
+- inspect the returned `run_id` and persisted run record
+- check run health through the run's explicit health URL
+- pass along run log references when they exist
+- export a run-scoped MoE probe manifest for MoE Run Anyway
 - hand the manifest to the MoE Run Anyway planner instead of asking the user to
   copy base URLs, ports, model ids, or log paths manually
 
@@ -31,7 +32,7 @@ and inspection surface over the profile and runtime state.
 
 ## Current Backend Surface
 
-The current backend surface is enough for the MoE bridge:
+The backend surface is enough for the run-state MoE bridge:
 
 | Endpoint | Purpose | Runtime effect |
 | --- | --- | --- |
@@ -39,14 +40,37 @@ The current backend surface is enough for the MoE bridge:
 | `GET /profiles/{profile_id}` | Read the full profile. | Reads one local profile. |
 | `POST /profiles/{profile_id}/validate` | Return profile errors and warnings. | Reads local paths for validation only. |
 | `POST /profiles/{profile_id}/render` | Return Docker command as an argv list and shell string. | Does not start Docker. |
-| `POST /profiles/{profile_id}/launch` | Launch the rendered runtime command. | Starts Docker only when explicitly called. |
+| `POST /profiles/{profile_id}/launch` | Create a persisted run record, then launch the rendered runtime command. | Starts Docker only when explicitly called. Failed Docker commands still leave an inspectable run id. |
 | `POST /profiles/{profile_id}/health` | Probe the configured health URL. | Sends a health request only. |
-| `GET /profiles/{profile_id}/moe-probe-manifest` | Export the MoE Run Anyway bridge manifest. | Reads profile data only. |
+| `GET /profiles/{profile_id}/moe-probe-manifest` | Export a pre-launch MoE Run Anyway bridge manifest. | Reads profile data only. |
+| `GET /runs` | List persisted run records. | Reads `state/runs.json`. |
+| `GET /runs/{run_id}` | Inspect one persisted run record. | Reads `state/runs.json`. |
+| `POST /runs/{run_id}/health` | Probe the run's explicit health URL and persist the result. | Sends a health request only. |
+| `GET /runs/{run_id}/moe-probe-manifest` | Export the MoE Run Anyway bridge manifest for one concrete run. | Reads run state and profile data only. |
 | `POST /containers/{container_name}/stop` | Stop a Dockyard-managed container. | Stops containers whose names start with `dockyard-`. |
 
-The manifest endpoint is the preferred integration point for MoE Run Anyway. It
-does not launch containers, download models, inspect tokens, start model
-servers, or send prompt traffic.
+The run-scoped manifest endpoint is the preferred integration point for MoE Run
+Anyway after launch. Manifest export does not launch containers, download
+models, inspect tokens, start model servers, or send prompt traffic.
+
+## Run State
+
+Run state is persisted in `dockyard/state/runs.json` with schema version
+`model-plane-run-state-v1`. A run record includes:
+
+- `run_id`, `profile_id`, and `profile_name`
+- `created_at`, `updated_at`, and `status`
+- `container_name`, `base_url`, `health_url`, and `log_file_path` when available
+- `model_id`, `model_path`, and `backend_family`
+- `launch_command`, `launch_shell_command`, `launch_returncode`,
+  `launch_stdout`, and `launch_stderr`
+- grouped `launch` details for human inspection
+- `last_health_result` after `POST /runs/{run_id}/health`
+
+`POST /profiles/{profile_id}/launch` creates the run record before Docker is
+called. If Docker exits nonzero, the run status becomes `launch_failed` and the
+return code/stdout/stderr remain durable. If the health endpoint is checked, the
+run status becomes `healthy` or `unhealthy` based on that explicit result.
 
 ## MoE Probe Manifest Fields
 
@@ -66,6 +90,14 @@ MoE Run Anyway needs:
 - `passive_sidecar_requested`
 - `runtime_observability.expected_paths`
 - `safety_notes`
+
+`GET /runs/{run_id}/moe-probe-manifest` returns the same bridge fields plus
+run-specific fields:
+
+- `run_id`
+- `latest_health_result`
+- `run_status`, `run_created_at`, and `run_updated_at`
+- launch command, shell command, return code, stdout, and stderr
 
 `primary_probe_hint` tells the downstream planner which safe path to prefer:
 
@@ -92,10 +124,12 @@ sidecar, or hookable semantic path. It can print command plans without starting
 servers, downloading models, running Docker, authenticating, inspecting private
 tokens, or sending prompt traffic.
 
-## Missing Future Surface
+## What Remains Manual
 
-The next useful bridge work is not another manual UI panel. It is a run-state
-API that records launches, log locations, and health results by run id, then
-lets the manifest reference a concrete run instead of only the source profile.
-That would make `launch -> health -> logs -> manifest` fully durable across
-agent turns.
+Model Plane is now durable enough for an agent to launch with user authorization,
+inspect a run id, check health, and hand an exact run manifest to MoE Run
+Anyway. The remaining manual surface is intentional authorization and local
+operator judgment: selecting which profile to launch, confirming that starting a
+container is acceptable, reading logs outside known log paths, and deciding
+whether to stop a `dockyard-` container. Deeper UI customization can layer on top
+of this contract without changing the agent run-state loop.
