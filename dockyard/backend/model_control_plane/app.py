@@ -12,9 +12,9 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import cron_tick as cron_tick_planner
+from . import callable_functions, cron_tick as cron_tick_planner
 from . import orchestration_jobs, run_state
-from .moe_probe_manifest import build_moe_probe_manifest, build_run_moe_probe_manifest
+from .moe_probe_manifest import backend_family, build_moe_probe_manifest, build_run_moe_probe_manifest
 
 ROOT = Path(__file__).resolve().parents[2]
 PROFILES = ROOT / "profiles"
@@ -29,6 +29,8 @@ app.add_middleware(
 
 CLEANUP_CANDIDATE_STATUSES = {"launch_failed", "launch_error", "unhealthy"}
 DEFAULT_STALE_LAUNCHING_SECONDS = 30 * 60
+LLAMA_CPP_MOE_OBSERVABILITY_FLAGS = ("--metrics", "--slots", "--props", "--perf")
+LLAMA_CPP_LOG_FILE_FLAGS = ("--log-file", "--log-file-path")
 
 
 class CleanupRequest(BaseModel):
@@ -85,6 +87,37 @@ def validate_profile(profile: dict[str, Any]) -> list[dict[str, str]]:
                 messages.append({"level": "warning", "code": "model_path", "message": f"Model path does not exist: {model_path}"})
     if "--trust-remote-code" in args:
         messages.append({"level": "warning", "code": "trust_remote_code", "message": "Profile uses --trust-remote-code; verify model code source."})
+    if backend_family(profile) == "llama_cpp":
+        arg_tokens = {str(arg) for arg in profile.get("runtime", {}).get("args", [])}
+        missing_flags = [flag for flag in LLAMA_CPP_MOE_OBSERVABILITY_FLAGS if flag not in arg_tokens]
+        if missing_flags:
+            messages.append({
+                "level": "warning",
+                "code": "llama_cpp_moe_observability_flags",
+                "message": "llama.cpp profile is missing MoE observability flags: " + ", ".join(missing_flags),
+            })
+        logs = profile.get("logs", {})
+        moe_probe = profile.get("moe_probe", {})
+        log_metadata = moe_probe.get("log_file_path") or logs.get("file_path") or logs.get("host_path")
+        runtime_log_flag = any(flag in arg_tokens for flag in LLAMA_CPP_LOG_FILE_FLAGS)
+        if not log_metadata or not runtime_log_flag:
+            missing = []
+            if not log_metadata:
+                missing.append("log_file_path metadata")
+            if not runtime_log_flag:
+                missing.append("--log-file or --log-file-path runtime flag")
+            messages.append({
+                "level": "warning",
+                "code": "llama_cpp_moe_log_file",
+                "message": "llama.cpp profile is missing MoE log-file configuration: " + ", ".join(missing),
+            })
+        observability_paths = moe_probe.get("observability_paths")
+        if not isinstance(observability_paths, list) or not observability_paths:
+            messages.append({
+                "level": "warning",
+                "code": "llama_cpp_moe_observability_paths",
+                "message": "llama.cpp profile should declare moe_probe.observability_paths for MoE manifest export.",
+            })
     return messages
 
 
@@ -112,6 +145,19 @@ def render_command(profile: dict[str, Any]) -> list[str]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/functions")
+def functions() -> list[dict[str, Any]]:
+    return callable_functions.list_function_descriptors()
+
+
+@app.get("/functions/{function_id}")
+def function(function_id: str) -> dict[str, Any]:
+    descriptor = callable_functions.get_function_descriptor(function_id)
+    if descriptor is None:
+        raise HTTPException(status_code=404, detail="Function descriptor not found")
+    return descriptor
 
 
 @app.get("/profiles")

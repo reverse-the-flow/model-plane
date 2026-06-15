@@ -24,7 +24,16 @@ def profile_fixture() -> dict:
             "volumes": [],
         },
         "health": {"url": "http://127.0.0.1:18080/health"},
-        "moe_probe": {"primary_probe_hint": "runtime_baseline"},
+        "logs": {
+            "file_path": "/mnt/Calliope/logs/model-plane/llama-cpp/llama-local.log",
+            "container_path": "/logs/llama-local.log",
+        },
+        "moe_probe": {
+            "primary_probe_hint": "runtime_baseline",
+            "semantic_expert_ids": "not_exposed",
+            "observability_paths": ["/metrics", "/slots", "/props", "/perf"],
+            "readiness_paths": ["/health"],
+        },
     }
 
 
@@ -56,7 +65,11 @@ class CronTickTests(unittest.TestCase):
             self.assertIn(unhealthy["run_id"], cleanup_run_ids)
             self.assertIn(stale["run_id"], cleanup_run_ids)
             for job in cleanup_jobs:
+                self.assertEqual(job["payload"]["function_id"], "cleanup.review")
+                self.assertEqual(job["payload"]["call"]["method"], "POST")
+                self.assertEqual(job["payload"]["call"]["path"], f"/runs/{job['run_id']}/cleanup")
                 self.assertEqual(job["payload"]["request_body"]["remove_container"], False)
+                self.assertEqual(job["payload"]["call"]["body"]["remove_container"], False)
                 self.assertIn("docker_prune", orchestration_jobs.get_job(job["job_id"], jobs_path)["forbidden_actions"])
 
     def test_cron_tick_creates_health_and_moe_probe_jobs_for_launched_and_healthy_runs(self) -> None:
@@ -85,6 +98,14 @@ class CronTickTests(unittest.TestCase):
             self.assertIn(healthy["run_id"], by_type["run_health_check"])
             self.assertIn(launched["run_id"], by_type["moe_probe_plan"])
             self.assertIn(healthy["run_id"], by_type["moe_probe_plan"])
+
+            payloads = {job["job_type"]: job["payload"] for job in result["created_jobs"]}
+            self.assertEqual(payloads["profile_validate"]["function_id"], "profile.validate")
+            self.assertEqual(payloads["profile_validate"]["call"]["path"], "/profiles/llama-local/validate")
+            self.assertEqual(payloads["run_health_check"]["function_id"], "run.health_check")
+            self.assertEqual(payloads["run_health_check"]["call"]["method"], "POST")
+            self.assertEqual(payloads["moe_probe_plan"]["function_id"], "run.moe_probe_manifest.export")
+            self.assertEqual(payloads["moe_probe_plan"]["call"]["method"], "GET")
 
     def test_cron_tick_is_idempotent_while_jobs_are_open(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

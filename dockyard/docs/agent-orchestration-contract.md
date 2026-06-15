@@ -37,8 +37,8 @@ An agent may:
   the concrete `dockyard-*` container recorded on a run
 - call the cron tick entrypoint to create bounded review packets from current
   profile and run state
-- inspect agent jobs, perform only the narrow action recorded on the packet, and
-  complete the job with metadata
+- inspect agent jobs, call only the Model Plane function descriptor recorded on
+  the packet, and complete the job with metadata
 
 An agent must not treat the human UI as the source of truth. The UI is a status
 and inspection surface over the profile and runtime state.
@@ -56,6 +56,8 @@ The backend surface is enough for the run-state MoE bridge:
 | `POST /profiles/{profile_id}/launch` | Create a persisted run record, then launch the rendered runtime command. | Starts Docker only when explicitly called. Failed Docker commands still leave an inspectable run id. |
 | `POST /profiles/{profile_id}/health` | Probe the configured health URL. | Sends a health request only. |
 | `GET /profiles/{profile_id}/moe-probe-manifest` | Export a pre-launch MoE Run Anyway bridge manifest. | Reads profile data only. |
+| `GET /functions` | List callable Model Plane function descriptors. | Reads the static function catalog. |
+| `GET /functions/{function_id}` | Inspect one callable function descriptor. | Reads the static function catalog. |
 | `GET /cleanup/plan` | List cleanup candidates and proposed run-scoped actions. | Reads `state/runs.json`; no Docker calls or state writes. |
 | `POST /cron/tick` | Create or reuse bounded agent job packets from profiles, runs, and cleanup plan state. | Writes `state/agent_jobs.json`; no Docker, downloads, token use, prompt traffic, model launch, or cleanup execution. |
 | `GET /agent-jobs` | List persisted agent job packets. | Reads `state/agent_jobs.json`. |
@@ -101,7 +103,8 @@ Agent jobs are persisted in `dockyard/state/agent_jobs.json` with schema version
 - `job_id`, `job_type`, `status`, `source`, `created_at`, and `updated_at`
 - optional `profile_id`, `run_id`, `model_id`, and `backend_family`
 - `allowed_actions` and `forbidden_actions`
-- `payload` with the next API path or command class
+- `payload` with `function_id`, a concrete `call` descriptor, and legacy
+  `api_path` or `command_class` fields where useful
 - `result` and `history` for completion or review metadata
 
 Open jobs are deduplicated by a stable key such as
@@ -109,6 +112,29 @@ Open jobs are deduplicated by a stable key such as
 ticks reuse open jobs instead of creating duplicate packets. Completing a job
 records metadata only; it does not run Docker, call health endpoints, export
 manifests, or execute external commands.
+
+Cron-created packets point at safe Model Plane functions, not shell commands.
+The function catalog is available through `GET /functions`; each descriptor
+includes `function_id`, `description`, `method`, `path_template`, `side_effect`,
+`required_fields`, `allowed_for_cron`, `forbidden_actions`, and optional
+`default_body`. External schedulers, Hermes, OpenClaw, local cron wrappers, or
+skills should treat the packet as an API/function call request:
+
+```json
+{
+  "function_id": "run.moe_probe_manifest.export",
+  "call": {
+    "method": "GET",
+    "path": "/runs/run-.../moe-probe-manifest",
+    "body": null,
+    "side_effect": "read_only_manifest_export"
+  }
+}
+```
+
+The scheduler is responsible for deciding whether to make the HTTP call and then
+recording completion metadata. Model Plane job creation itself still does not
+execute those actions.
 
 Current job types are:
 
@@ -154,8 +180,11 @@ curl -X POST http://127.0.0.1:19110/cron/tick
 ```
 
 The tick reads profiles and runs, asks the existing cleanup planner for
-candidates, then creates small packets. It does not call Docker, download
-models, use tokens, launch model servers, send prompts, or execute cleanup.
+candidates, then creates small packets with callable function descriptors.
+Cron, Hermes, OpenClaw, local schedulers, or skills consume those packets by
+calling the recorded Model Plane API function and then `job.complete`. The tick
+does not call Docker, download models, use tokens, launch model servers, send
+prompts, call health endpoints, export manifests, or execute cleanup.
 
 ## Cleanup Planning And Action
 
@@ -196,7 +225,11 @@ MoE Run Anyway needs:
 - `semantic_expert_ids`
 - `hookable_runtime_available`
 - `passive_sidecar_requested`
+- `observability_paths`, `readiness_paths`, and `log_paths`
 - `runtime_observability.expected_paths`
+- `runtime_observability.required_paths`
+- `runtime_observability.readiness_paths`
+- `runtime_observability.log_file_path`
 - `safety_notes`
 
 `GET /runs/{run_id}/moe-probe-manifest` returns the same bridge fields plus
@@ -218,6 +251,28 @@ run-specific fields:
 OpenAI-compatible endpoints provide runtime evidence, not semantic expert ids.
 Semantic expert ids require a hookable local runtime or future backend patch
 that exposes router outputs.
+
+### llama.cpp MoE Observability
+
+For MoE Run Anyway compatibility, a `llama.cpp` profile should expose the stock
+runtime evidence paths the harness can inspect:
+
+- runtime args include `--metrics`, `--slots`, `--props`, and `--perf`
+- runtime args configure a log file, usually container-side `--log-file
+  /logs/<name>.log`
+- the host log file path is present in `logs.file_path` or
+  `moe_probe.log_file_path` so the MoE harness can pass it as
+  `--log-file-path`
+- `moe_probe.primary_probe_hint` is `runtime_baseline`
+- `moe_probe.semantic_expert_ids` is `not_exposed`
+- `moe_probe.observability_paths` lists `/metrics`, `/slots`, `/props`, and
+  `/perf`
+- `moe_probe.readiness_paths` lists the readiness endpoint, usually `/health`
+
+Model Plane validation warns when a llama.cpp profile is missing these MoE
+observability flags or log metadata. These are warnings, not hard errors,
+because an example profile must remain inspectable even when local host paths do
+not exist.
 
 ## Handoff To MoE Run Anyway
 

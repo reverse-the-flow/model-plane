@@ -15,6 +15,14 @@ class MoeProbeManifestTests(unittest.TestCase):
                 "runtime": {"backend": "llama_cpp"},
                 "container": {"name": "dockyard-llama-local", "host_port": 18080},
                 "health": {"url": "http://127.0.0.1:18080/health"},
+                "logs": {
+                    "file_path": "/mnt/Calliope/logs/model-plane/llama-cpp/llama-local.log",
+                    "container_path": "/logs/llama-local.log",
+                },
+                "moe_probe": {
+                    "observability_paths": ["/metrics", "/slots", "/props", "/perf"],
+                    "readiness_paths": ["/health"],
+                },
             }
         )
 
@@ -25,6 +33,12 @@ class MoeProbeManifestTests(unittest.TestCase):
         self.assertEqual(manifest["primary_probe_hint"], "runtime_baseline")
         self.assertEqual(manifest["semantic_expert_ids"], "not_exposed")
         self.assertFalse(manifest["hookable_runtime_available"])
+        self.assertEqual(manifest["observability_paths"], ["/metrics", "/slots", "/props", "/perf"])
+        self.assertEqual(manifest["readiness_paths"], ["/health"])
+        self.assertEqual(manifest["log_file_path"], "/mnt/Calliope/logs/model-plane/llama-cpp/llama-local.log")
+        self.assertEqual(manifest["log_paths"]["container_log_file_path"], "/logs/llama-local.log")
+        self.assertEqual(manifest["runtime_observability"]["required_paths"], ["/metrics", "/slots", "/props", "/perf"])
+        self.assertEqual(manifest["runtime_observability"]["log_file_path"], "/mnt/Calliope/logs/model-plane/llama-cpp/llama-local.log")
 
     def test_hookable_profile_can_request_semantic_probe_path(self) -> None:
         manifest = build_moe_probe_manifest(

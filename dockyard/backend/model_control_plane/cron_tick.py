@@ -4,22 +4,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from . import orchestration_jobs, run_state
+from . import callable_functions, orchestration_jobs, run_state
 
 
 CRON_TICK_SCHEMA_VERSION = "model-plane-cron-tick-v1"
 DEFAULT_HEALTH_STALE_SECONDS = 15 * 60
 DEFAULT_STALE_LAUNCHING_SECONDS = 30 * 60
 
-COMMON_FORBIDDEN_ACTIONS = [
-    "download_models",
-    "use_tokens",
-    "docker_prune",
-    "broad_deletion",
-    "unapproved_prompt_traffic",
-    "unapproved_model_launch",
-    "start_model_server",
-]
+COMMON_FORBIDDEN_ACTIONS = callable_functions.COMMON_FORBIDDEN_ACTIONS
 
 
 def parse_utc_timestamp(value: Any) -> datetime | None:
@@ -78,7 +70,10 @@ def should_moe_probe_plan(run: dict[str, Any]) -> tuple[bool, str]:
 
 def profile_job_payload(profile: dict[str, Any], messages: list[dict[str, str]]) -> dict[str, Any]:
     profile_id = str(profile.get("id") or "")
+    function_id = "profile.validate"
     return {
+        "function_id": function_id,
+        "call": callable_functions.build_call_descriptor(function_id, {"profile_id": profile_id}),
         "api_path": f"/profiles/{profile_id}/validate",
         "command_class": "profile_validation_review",
         "validation_summary": {
@@ -92,7 +87,10 @@ def profile_job_payload(profile: dict[str, Any], messages: list[dict[str, str]])
 
 def run_health_job_payload(run: dict[str, Any], reason: str) -> dict[str, Any]:
     run_id = str(run.get("run_id") or "")
+    function_id = "run.health_check"
     return {
+        "function_id": function_id,
+        "call": callable_functions.build_call_descriptor(function_id, {"run_id": run_id}),
         "api_path": f"/runs/{run_id}/health",
         "command_class": "run_health_check",
         "reason": reason,
@@ -103,7 +101,10 @@ def run_health_job_payload(run: dict[str, Any], reason: str) -> dict[str, Any]:
 
 def moe_probe_job_payload(run: dict[str, Any], reason: str) -> dict[str, Any]:
     run_id = str(run.get("run_id") or "")
+    function_id = "run.moe_probe_manifest.export"
     return {
+        "function_id": function_id,
+        "call": callable_functions.build_call_descriptor(function_id, {"run_id": run_id}),
         "api_path": f"/runs/{run_id}/moe-probe-manifest",
         "command_class": "moe_run_anyway_probe_plan",
         "planner_mode": "plan_or_review_only",
@@ -114,7 +115,10 @@ def moe_probe_job_payload(run: dict[str, Any], reason: str) -> dict[str, Any]:
 
 def cleanup_job_payload(candidate: dict[str, Any]) -> dict[str, Any]:
     run_id = str(candidate.get("run_id") or "")
+    function_id = "cleanup.review"
     return {
+        "function_id": function_id,
+        "call": callable_functions.build_call_descriptor(function_id, {"run_id": run_id}),
         "api_path": f"/runs/{run_id}/cleanup",
         "command_class": "cleanup_review_only",
         "request_body": {"remove_container": False, "notes": "cron review packet"},

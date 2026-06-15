@@ -21,6 +21,12 @@ runtime:
     - "8192"
     - --n-gpu-layers
     - "999"
+    - --metrics
+    - --slots
+    - --props
+    - --perf
+    - --log-file
+    - /logs/llama-cpp-example.log
 container:
   name: dockyard-llama-cpp-example
   host_port: 18080
@@ -28,6 +34,22 @@ container:
   gpu: all
   volumes:
     - /mnt/Calliope/models:/models:ro
+    - /mnt/Calliope/logs/model-plane/llama-cpp:/logs
   env: {}
 health:
   url: http://127.0.0.1:18080/health
+logs:
+  file_path: /mnt/Calliope/logs/model-plane/llama-cpp/llama-cpp-example.log
+  container_path: /logs/llama-cpp-example.log
+moe_probe:
+  primary_probe_hint: runtime_baseline
+  semantic_expert_ids: not_exposed
+  log_file_path: /mnt/Calliope/logs/model-plane/llama-cpp/llama-cpp-example.log
+  container_log_file_path: /logs/llama-cpp-example.log
+  observability_paths:
+    - /metrics
+    - /slots
+    - /props
+    - /perf
+  readiness_paths:
+    - /health

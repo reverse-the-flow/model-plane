@@ -4,6 +4,7 @@ from typing import Any
 
 
 MOE_MANIFEST_SCHEMA_VERSION = "model-plane-moe-probe-manifest-v1"
+LLAMA_CPP_REQUIRED_OBSERVABILITY_PATHS = ["/metrics", "/slots", "/props", "/perf"]
 
 
 def normalize_base_url(url: str) -> str:
@@ -63,12 +64,61 @@ def primary_probe_hint(profile: dict[str, Any]) -> str:
     return "runtime_baseline"
 
 
+def configured_log_file_path(profile: dict[str, Any]) -> Any:
+    moe_probe = profile.get("moe_probe", {})
+    logs = profile.get("logs", {})
+    return moe_probe.get("log_file_path") or logs.get("file_path") or logs.get("host_path")
+
+
+def configured_log_container_path(profile: dict[str, Any]) -> Any:
+    moe_probe = profile.get("moe_probe", {})
+    logs = profile.get("logs", {})
+    return moe_probe.get("container_log_file_path") or logs.get("container_path")
+
+
+def observability_paths(profile: dict[str, Any]) -> list[str]:
+    moe_probe = profile.get("moe_probe", {})
+    configured = moe_probe.get("observability_paths")
+    if isinstance(configured, list) and configured:
+        return [str(path) for path in configured]
+    if backend_family(profile) == "llama_cpp":
+        return list(LLAMA_CPP_REQUIRED_OBSERVABILITY_PATHS)
+    return ["/props", "/metrics", "/slots"]
+
+
+def readiness_paths(profile: dict[str, Any]) -> list[str]:
+    moe_probe = profile.get("moe_probe", {})
+    configured = moe_probe.get("readiness_paths")
+    if isinstance(configured, list) and configured:
+        return [str(path) for path in configured]
+    health_url = str(profile.get("health", {}).get("url") or "")
+    if health_url.endswith("/health"):
+        return ["/health"]
+    if health_url.endswith("/v1/models"):
+        return ["/v1/models"]
+    if health_url.endswith("/models"):
+        return ["/models"]
+    return []
+
+
 def build_moe_probe_manifest(profile: dict[str, Any]) -> dict[str, Any]:
     moe_probe = profile.get("moe_probe", {})
     model = profile.get("model", {})
     container = profile.get("container", {})
     semantic_status = semantic_expert_ids_status(profile)
     hookable = bool(moe_probe.get("hookable_runtime_available"))
+    expected_paths = observability_paths(profile)
+    configured_required_paths = moe_probe.get("required_observability_paths")
+    required_paths = (
+        expected_paths
+        if backend_family(profile) == "llama_cpp"
+        else [str(path) for path in configured_required_paths]
+        if isinstance(configured_required_paths, list)
+        else []
+    )
+    ready_paths = readiness_paths(profile)
+    log_file_path = configured_log_file_path(profile)
+    container_log_file_path = configured_log_container_path(profile)
     return {
         "schema_version": MOE_MANIFEST_SCHEMA_VERSION,
         "profile_id": profile.get("id"),
@@ -78,15 +128,25 @@ def build_moe_probe_manifest(profile: dict[str, Any]) -> dict[str, Any]:
         "backend_family": backend_family(profile),
         "base_url": endpoint_base_url(profile),
         "health_url": profile.get("health", {}).get("url"),
-        "log_file_path": moe_probe.get("log_file_path") or profile.get("logs", {}).get("file_path"),
+        "log_file_path": log_file_path,
         "container_name": container.get("name"),
         "primary_probe_hint": primary_probe_hint(profile),
         "semantic_expert_ids": semantic_status,
         "hookable_runtime_available": hookable,
         "passive_sidecar_requested": bool(moe_probe.get("passive_sidecar_requested")),
+        "observability_paths": expected_paths,
+        "readiness_paths": ready_paths,
+        "log_paths": {
+            "host_log_file_path": log_file_path,
+            "container_log_file_path": container_log_file_path,
+        },
         "runtime_observability": {
             "kind": "runtime_evidence",
-            "expected_paths": list(moe_probe.get("observability_paths", ["/props", "/metrics", "/slots"])),
+            "expected_paths": expected_paths,
+            "required_paths": required_paths,
+            "readiness_paths": ready_paths,
+            "log_file_path": log_file_path,
+            "container_log_file_path": container_log_file_path,
         },
         "safety_notes": [
             "Manifest export does not start containers or model servers.",
@@ -100,6 +160,9 @@ def build_moe_probe_manifest(profile: dict[str, Any]) -> dict[str, Any]:
 def build_run_moe_probe_manifest(profile: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
     manifest = build_moe_probe_manifest(profile)
     latest_health = run.get("last_health_result")
+    log_file_path = run.get("log_file_path") or manifest.get("log_file_path")
+    runtime_observability = dict(manifest.get("runtime_observability") or {})
+    runtime_observability["log_file_path"] = log_file_path
     manifest.update(
         {
             "run_id": run.get("run_id"),
@@ -111,7 +174,12 @@ def build_run_moe_probe_manifest(profile: dict[str, Any], run: dict[str, Any]) -
             "base_url": run.get("base_url") or manifest.get("base_url"),
             "health_url": run.get("health_url") or manifest.get("health_url"),
             "container_name": run.get("container_name") or manifest.get("container_name"),
-            "log_file_path": run.get("log_file_path") or manifest.get("log_file_path"),
+            "log_file_path": log_file_path,
+            "log_paths": {
+                **dict(manifest.get("log_paths") or {}),
+                "host_log_file_path": log_file_path,
+            },
+            "runtime_observability": runtime_observability,
             "primary_probe_hint": run.get("primary_probe_hint") or manifest.get("primary_probe_hint"),
             "semantic_expert_ids": run.get("semantic_expert_ids") or manifest.get("semantic_expert_ids"),
             "semantic_expert_ids_status": run.get("semantic_expert_ids") or manifest.get("semantic_expert_ids"),

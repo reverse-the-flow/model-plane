@@ -25,7 +25,16 @@ def profile_fixture() -> dict:
             "volumes": [],
         },
         "health": {"url": "http://127.0.0.1:18080/health"},
-        "moe_probe": {"primary_probe_hint": "runtime_baseline"},
+        "logs": {
+            "file_path": "/mnt/Calliope/logs/model-plane/llama-cpp/llama-local.log",
+            "container_path": "/logs/llama-local.log",
+        },
+        "moe_probe": {
+            "primary_probe_hint": "runtime_baseline",
+            "semantic_expert_ids": "not_exposed",
+            "observability_paths": ["/metrics", "/slots", "/props", "/perf"],
+            "readiness_paths": ["/health"],
+        },
     }
 
 
@@ -111,6 +120,10 @@ class RunApiTests(unittest.TestCase):
             self.assertEqual(manifest["latest_health_result"]["status"], 200)
             self.assertEqual(manifest["primary_probe_hint"], "runtime_baseline")
             self.assertEqual(manifest["semantic_expert_ids_status"], "not_exposed")
+            self.assertEqual(manifest["observability_paths"], ["/metrics", "/slots", "/props", "/perf"])
+            self.assertEqual(manifest["runtime_observability"]["readiness_paths"], ["/health"])
+            self.assertEqual(manifest["runtime_observability"]["log_file_path"], "/mnt/Calliope/logs/model-plane/llama-cpp/llama-local.log")
+            self.assertEqual(manifest["log_paths"]["host_log_file_path"], "/mnt/Calliope/logs/model-plane/llama-cpp/llama-local.log")
             self.assertIn("safety_notes", manifest)
 
     def test_cleanup_plan_returns_failed_and_unhealthy_candidates(self) -> None:

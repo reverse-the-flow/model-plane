@@ -20,8 +20,11 @@ Dockyard answers whether a model stack runs reliably. Tuner answers which settin
 Dockyard also exposes a cron-friendly orchestration surface. A scheduled
 `dockyard/backend/scripts/cron_tick.py` call creates bounded agent job packets
 for profile validation, run health review, MoE probe planning, and cleanup
-review without starting Docker, downloading models, using tokens, launching
-model servers, sending prompts, or performing cleanup.
+review. Packets contain callable Model Plane function descriptors, not shell
+commands, so external schedulers or skills can call the explicit API function and
+then record completion metadata. Job creation itself does not start Docker,
+download models, use tokens, launch model servers, send prompts, or perform
+cleanup.
 
 ## Repository Boundary
 

@@ -58,10 +58,13 @@ The tick reads profiles, run state, and the cleanup plan, then creates or reuses
 small job packets in `dockyard/state/agent_jobs.json`.
 
 Default jobs are plan/review oriented: `profile_validate`, `run_health_check`,
-`moe_probe_plan`, and `cleanup_review`. The tick does not call Docker, download
-models, use tokens, launch model servers, send prompts, or perform cleanup.
-Local-model subagents may later consume these packets, but cron remains the
-heartbeat and Model Plane remains the guardrail/state layer.
+`moe_probe_plan`, and `cleanup_review`. Each packet includes a `function_id` and
+a concrete `call` object with method, path, body, and side-effect description.
+These are callable Model Plane API descriptors for external schedulers, Hermes,
+OpenClaw, local cron wrappers, or skills; they are not shell commands. The tick
+does not call Docker, download models, use tokens, launch model servers, send
+prompts, call health endpoints, export manifests, or perform cleanup. Consumers
+call the recorded function and then complete the job with metadata.
 
 ## MoE Probe Manifest
 
@@ -87,11 +90,19 @@ Run state is persisted in `dockyard/state/runs.json`. Launch attempts are
 recorded before Docker is called, so failed Docker commands still produce an
 inspectable run id. The manifest includes the selected profile id, run id, model
 id/path, backend family, base URL, health URL, optional log file path, container
-name, latest health result, a primary probe hint, and safety notes. Stock
-`llama.cpp`, vLLM, Ollama, and other
-OpenAI-compatible backends are reported as runtime-observability paths; they do
-not expose semantic expert ids unless a profile explicitly declares a hookable
-local runtime.
+name, latest health result, a primary probe hint, runtime observability paths,
+readiness paths, log path metadata, and safety notes. Stock `llama.cpp`, vLLM,
+Ollama, and other OpenAI-compatible backends are reported as
+runtime-observability paths; they do not expose semantic expert ids unless a
+profile explicitly declares a hookable local runtime.
+
+For `llama.cpp`, MoE Run Anyway expects the profile to advertise `--metrics`,
+`--slots`, `--props`, `--perf`, and log-file configuration. The example profile
+maps a host log directory under `/mnt/Calliope/logs/model-plane/llama-cpp` into
+the container as `/logs`, records the host log path for MoE `--log-file-path`,
+and declares `/metrics`, `/slots`, `/props`, `/perf`, plus `/health` readiness
+metadata under `moe_probe`. Validation warns, rather than errors, when a
+`llama.cpp` profile is missing those observability fields.
 
 ## Cleanup Planning
 
