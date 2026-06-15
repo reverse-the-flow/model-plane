@@ -35,8 +35,33 @@ The intended bridge flow is:
 profile -> launch -> run id -> health/logs/state -> export MoE probe manifest -> cleanup plan -> cleanup action
 ```
 
+The cron-friendly orchestration flow is:
+
+```text
+cron tick -> agent job packets -> subagent/tool execution -> completion metadata -> cleanup/retry
+```
+
 Read [docs/agent-orchestration-contract.md](docs/agent-orchestration-contract.md)
 for the current endpoint contract and safety boundaries.
+
+## Cron Agent Jobs
+
+Cron should call one deterministic tick entrypoint:
+
+```bash
+cd /home/codexlab/model-plane-bridge-work/dockyard/backend
+python3 scripts/cron_tick.py
+```
+
+The same behavior is exposed as `POST /cron/tick` when the backend is running.
+The tick reads profiles, run state, and the cleanup plan, then creates or reuses
+small job packets in `dockyard/state/agent_jobs.json`.
+
+Default jobs are plan/review oriented: `profile_validate`, `run_health_check`,
+`moe_probe_plan`, and `cleanup_review`. The tick does not call Docker, download
+models, use tokens, launch model servers, send prompts, or perform cleanup.
+Local-model subagents may later consume these packets, but cron remains the
+heartbeat and Model Plane remains the guardrail/state layer.
 
 ## MoE Probe Manifest
 

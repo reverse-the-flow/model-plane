@@ -10,9 +10,10 @@ from typing import Any
 import yaml
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from . import run_state
+from . import cron_tick as cron_tick_planner
+from . import orchestration_jobs, run_state
 from .moe_probe_manifest import build_moe_probe_manifest, build_run_moe_probe_manifest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,15 @@ DEFAULT_STALE_LAUNCHING_SECONDS = 30 * 60
 
 class CleanupRequest(BaseModel):
     remove_container: bool = False
+    notes: str | None = None
+
+
+class CronTickRequest(BaseModel):
+    health_stale_seconds: int = cron_tick_planner.DEFAULT_HEALTH_STALE_SECONDS
+
+
+class JobCompletionRequest(BaseModel):
+    result: dict[str, Any] = Field(default_factory=dict)
     notes: str | None = None
 
 
@@ -153,6 +163,51 @@ def cleanup_plan(
     stale_launching_after_seconds: int = DEFAULT_STALE_LAUNCHING_SECONDS,
 ) -> dict[str, Any]:
     return build_cleanup_plan(run_state.list_runs(), run_id, stale_launching_after_seconds)
+
+
+def run_cron_tick(request: CronTickRequest | None = None) -> dict[str, Any]:
+    selected_request = request or CronTickRequest()
+    selected_runs = run_state.list_runs()
+    return cron_tick_planner.cron_tick(
+        profiles=all_profiles(),
+        runs=selected_runs,
+        cleanup_plan=build_cleanup_plan(
+            selected_runs,
+            stale_launching_after_seconds=cron_tick_planner.DEFAULT_STALE_LAUNCHING_SECONDS,
+        ),
+        validate_profile=validate_profile,
+        health_stale_seconds=selected_request.health_stale_seconds,
+    )
+
+
+@app.post("/cron/tick")
+def cron_tick(request: CronTickRequest | None = None) -> dict[str, Any]:
+    return run_cron_tick(request)
+
+
+@app.get("/agent-jobs")
+def agent_jobs(status: str | None = None) -> list[dict[str, Any]]:
+    return orchestration_jobs.list_jobs(status=status)
+
+
+@app.get("/agent-jobs/{job_id}")
+def agent_job(job_id: str) -> dict[str, Any]:
+    selected = orchestration_jobs.get_job(job_id)
+    if selected is None:
+        raise HTTPException(status_code=404, detail="Agent job not found")
+    return selected
+
+
+@app.post("/agent-jobs/{job_id}/complete")
+def complete_agent_job(job_id: str, request: JobCompletionRequest | None = None) -> dict[str, Any]:
+    selected_request = request or JobCompletionRequest()
+    result = dict(selected_request.result)
+    if selected_request.notes is not None:
+        result["notes"] = selected_request.notes
+    completed = orchestration_jobs.complete_job(job_id, result)
+    if completed is None:
+        raise HTTPException(status_code=404, detail="Agent job not found")
+    return completed
 
 
 def check_health_url(url: str) -> dict[str, Any]:

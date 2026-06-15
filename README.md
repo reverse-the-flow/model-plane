@@ -17,6 +17,12 @@ Parent workspace for local model launch and tuning work.
 
 Dockyard answers whether a model stack runs reliably. Tuner answers which settings run best.
 
+Dockyard also exposes a cron-friendly orchestration surface. A scheduled
+`dockyard/backend/scripts/cron_tick.py` call creates bounded agent job packets
+for profile validation, run health review, MoE probe planning, and cleanup
+review without starting Docker, downloading models, using tokens, launching
+model servers, sending prompts, or performing cleanup.
+
 ## Repository Boundary
 
 This repository is source and configuration only. Local model files, generated
