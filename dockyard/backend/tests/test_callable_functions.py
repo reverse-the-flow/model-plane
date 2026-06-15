@@ -21,11 +21,25 @@ class CallableFunctionsTests(unittest.TestCase):
                 "cleanup.review",
                 "job.complete",
                 "cron.tick",
+                "secret.hf_token.status",
+                "secret.hf_token.set",
+                "secret.hf_token.clear",
             },
             set(by_id),
         )
-        self.assertTrue(all(descriptor["allowed_for_cron"] for descriptor in descriptors))
+        self.assertTrue(by_id["secret.hf_token.status"]["allowed_for_cron"])
+        self.assertFalse(by_id["secret.hf_token.set"]["allowed_for_cron"])
+        self.assertFalse(by_id["secret.hf_token.clear"]["allowed_for_cron"])
+        self.assertTrue(
+            all(
+                descriptor["allowed_for_cron"]
+                for function_id, descriptor in by_id.items()
+                if not function_id.startswith("secret.hf_token.")
+            )
+        )
         self.assertEqual(by_id["profile.validate"]["path_template"], "/profiles/{profile_id}/validate")
+        self.assertIn("return_secret_values", by_id["secret.hf_token.set"]["forbidden_actions"])
+        self.assertIn("persist_secret_values", by_id["secret.hf_token.status"]["forbidden_actions"])
 
     def test_build_call_descriptor_resolves_path_and_side_effect(self) -> None:
         call = callable_functions.build_call_descriptor("cleanup.review", {"run_id": "run-1"})

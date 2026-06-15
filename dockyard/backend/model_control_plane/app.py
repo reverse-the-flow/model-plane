@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 import urllib.request
@@ -45,6 +46,29 @@ class CronTickRequest(BaseModel):
 class JobCompletionRequest(BaseModel):
     result: dict[str, Any] = Field(default_factory=dict)
     notes: str | None = None
+
+
+class HfTokenRequest(BaseModel):
+    token: str
+
+
+class HfTokenStatus(BaseModel):
+    env_var: str
+    configured: bool
+    scope: str
+    redacted: str
+    restart_notice: str
+
+
+def hf_token_metadata() -> dict[str, str | bool]:
+    configured = bool(os.environ.get("HF_TOKEN"))
+    return {
+        "env_var": "HF_TOKEN",
+        "configured": configured,
+        "scope": "process_env",
+        "redacted": "set" if configured else "unset",
+        "restart_notice": "Session/process scoped; re-enter after backend restart.",
+    }
 
 
 def profile_files() -> list[Path]:
@@ -158,6 +182,26 @@ def function(function_id: str) -> dict[str, Any]:
     if descriptor is None:
         raise HTTPException(status_code=404, detail="Function descriptor not found")
     return descriptor
+
+
+@app.get("/secrets/hf-token", response_model=HfTokenStatus)
+def get_hf_token_status() -> dict[str, str | bool]:
+    return hf_token_metadata()
+
+
+@app.post("/secrets/hf-token", response_model=HfTokenStatus)
+def set_hf_token(request: HfTokenRequest) -> dict[str, str | bool]:
+    token = request.token.strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="HF_TOKEN must not be empty.")
+    os.environ["HF_TOKEN"] = token
+    return hf_token_metadata()
+
+
+@app.delete("/secrets/hf-token", response_model=HfTokenStatus)
+def clear_hf_token() -> dict[str, str | bool]:
+    os.environ.pop("HF_TOKEN", None)
+    return hf_token_metadata()
 
 
 @app.get("/profiles")

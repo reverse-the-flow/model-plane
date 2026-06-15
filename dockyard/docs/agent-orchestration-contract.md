@@ -39,6 +39,9 @@ An agent may:
   profile and run state
 - inspect agent jobs, call only the Model Plane function descriptor recorded on
   the packet, and complete the job with metadata
+- inspect the redacted `HF_TOKEN` configured/unconfigured status
+- set or clear `HF_TOKEN` only through the explicit human-facing secret endpoint
+  when the user has provided the value for the current backend session
 
 An agent must not treat the human UI as the source of truth. The UI is a status
 and inspection surface over the profile and runtime state.
@@ -58,6 +61,9 @@ The backend surface is enough for the run-state MoE bridge:
 | `GET /profiles/{profile_id}/moe-probe-manifest` | Export a pre-launch MoE Run Anyway bridge manifest. | Reads profile data only. |
 | `GET /functions` | List callable Model Plane function descriptors. | Reads the static function catalog. |
 | `GET /functions/{function_id}` | Inspect one callable function descriptor. | Reads the static function catalog. |
+| `GET /secrets/hf-token` | Return redacted `HF_TOKEN` status metadata. | Reads the current backend process environment only. |
+| `POST /secrets/hf-token` | Strip and set `HF_TOKEN` in the running backend process environment. | Writes only to process environment; does not persist or return the token. |
+| `DELETE /secrets/hf-token` | Clear `HF_TOKEN` from the running backend process environment. | Removes only the process environment value. |
 | `GET /cleanup/plan` | List cleanup candidates and proposed run-scoped actions. | Reads `state/runs.json`; no Docker calls or state writes. |
 | `POST /cron/tick` | Create or reuse bounded agent job packets from profiles, runs, and cleanup plan state. | Writes `state/agent_jobs.json`; no Docker, downloads, token use, prompt traffic, model launch, or cleanup execution. |
 | `GET /agent-jobs` | List persisted agent job packets. | Reads `state/agent_jobs.json`. |
@@ -73,6 +79,34 @@ The backend surface is enough for the run-state MoE bridge:
 The run-scoped manifest endpoint is the preferred integration point for MoE Run
 Anyway after launch. Manifest export does not launch containers, download
 models, inspect tokens, start model servers, or send prompt traffic.
+
+## Hugging Face Token Boundary
+
+Model Plane supports a small session-scoped Hugging Face token flow. The UI
+dialog accepts `HF_TOKEN` through a password input and posts it to the backend.
+The backend strips surrounding whitespace, rejects an empty value, and stores the
+token only in `os.environ["HF_TOKEN"]` for the running backend process.
+
+The secret endpoints return only metadata: `env_var`, `configured`, `scope`, a
+redacted set/unset marker, and a restart notice. They never echo or return the
+raw token. The frontend does not use `localStorage` or `sessionStorage` for this
+value and clears the input after a successful set.
+
+The token is not persisted to disk and must be entered again after the backend
+restarts. It must not appear in profiles, manifests, rendered Docker commands,
+run state, agent job state, cron packets, logs, docs examples, test output, or
+Git. Hugging Face Hub libraries and model pull subprocesses read `HF_TOKEN` from
+environment variables, often at import or subprocess startup time, so the token
+should be present before those subprocesses or imports begin.
+
+The function catalog exposes:
+
+- `secret.hf_token.status`: cron-readable redacted status only.
+- `secret.hf_token.set`: not allowed for cron.
+- `secret.hf_token.clear`: not allowed for cron.
+
+All secret descriptors forbid logging, persisting, echoing, returning, or
+including secret values in manifests, job state, or rendered commands.
 
 ## Run State
 

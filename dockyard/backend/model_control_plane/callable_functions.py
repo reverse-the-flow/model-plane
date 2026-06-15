@@ -16,7 +16,48 @@ COMMON_FORBIDDEN_ACTIONS = [
     "start_model_server",
 ]
 
+SECRET_FORBIDDEN_ACTIONS = COMMON_FORBIDDEN_ACTIONS + [
+    "log_secret_values",
+    "persist_secret_values",
+    "echo_secret_values",
+    "return_secret_values",
+    "include_secret_values_in_manifests",
+    "include_secret_values_in_job_state",
+    "include_secret_values_in_rendered_commands",
+]
+
 FUNCTION_CATALOG: dict[str, FunctionDescriptor] = {
+    "secret.hf_token.clear": {
+        "function_id": "secret.hf_token.clear",
+        "description": "Clear the process-scoped Hugging Face token from HF_TOKEN without returning its value.",
+        "method": "DELETE",
+        "path_template": "/secrets/hf-token",
+        "side_effect": "process_env_secret_clear",
+        "required_fields": [],
+        "allowed_for_cron": False,
+        "forbidden_actions": SECRET_FORBIDDEN_ACTIONS,
+    },
+    "secret.hf_token.set": {
+        "function_id": "secret.hf_token.set",
+        "description": "Set the process-scoped Hugging Face token in HF_TOKEN without persisting or returning its value.",
+        "method": "POST",
+        "path_template": "/secrets/hf-token",
+        "side_effect": "process_env_secret_write",
+        "required_fields": [],
+        "allowed_for_cron": False,
+        "forbidden_actions": SECRET_FORBIDDEN_ACTIONS,
+        "default_body": {"token": ""},
+    },
+    "secret.hf_token.status": {
+        "function_id": "secret.hf_token.status",
+        "description": "Return redacted Hugging Face token status for HF_TOKEN.",
+        "method": "GET",
+        "path_template": "/secrets/hf-token",
+        "side_effect": "read_only_secret_status",
+        "required_fields": [],
+        "allowed_for_cron": True,
+        "forbidden_actions": SECRET_FORBIDDEN_ACTIONS,
+    },
     "profile.validate": {
         "function_id": "profile.validate",
         "description": "Validate one saved profile and return warnings or errors.",

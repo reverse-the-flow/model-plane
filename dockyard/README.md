@@ -66,6 +66,28 @@ does not call Docker, download models, use tokens, launch model servers, send
 prompts, call health endpoints, export manifests, or perform cleanup. Consumers
 call the recorded function and then complete the job with metadata.
 
+## Hugging Face Token Entry
+
+The console has an `HF Token` button for setting `HF_TOKEN` in the running
+backend process environment. The dialog uses a password input and the backend
+returns only safe metadata:
+
+- `env_var: HF_TOKEN`
+- `configured: true` or `false`
+- `scope: process_env`
+- `redacted: set` or `unset`
+
+The token is session/process scoped. It is not persisted to disk and must be
+entered again after the backend restarts. Model Plane does not echo the raw
+value from any API, store it in browser storage, write it to profiles, manifests,
+run state, agent job state, logs, docs, or Git, or include it in rendered Docker
+commands. Use `Clear` in the dialog or `DELETE /secrets/hf-token` to remove it
+from the current backend process.
+
+Hugging Face Hub libraries and subprocesses read `HF_TOKEN` from environment
+variables, often at import or startup time. Set the token before starting a model
+pull subprocess or importing code that needs Hub authentication.
+
 ## MoE Probe Manifest
 
 Model Plane can export a compact JSON manifest for agents that need to plan a
