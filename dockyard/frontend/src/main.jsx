@@ -13,6 +13,7 @@ function App() {
   const [hfTokenStatus, setHfTokenStatus] = useState({ configured: false, redacted: "unset" });
   const [hfTokenDialogOpen, setHfTokenDialogOpen] = useState(false);
   const [hfTokenInput, setHfTokenInput] = useState("");
+  const [hfTokenRemember, setHfTokenRemember] = useState(false);
   const [hfTokenMessage, setHfTokenMessage] = useState("");
 
   async function refresh() {
@@ -56,10 +57,11 @@ function App() {
   async function setHfToken(event) {
     event.preventDefault();
     setHfTokenMessage("");
+    const rememberRequested = hfTokenRemember;
     const res = await fetch(`${API}/secrets/hf-token`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token: hfTokenInput }),
+      body: JSON.stringify({ token: hfTokenInput, remember: rememberRequested }),
     });
     const tokenStatus = await res.json();
     if (!res.ok) {
@@ -67,8 +69,15 @@ function App() {
       return;
     }
     setHfTokenInput("");
+    setHfTokenRemember(false);
     setHfTokenStatus(tokenStatus);
-    setHfTokenMessage("HF_TOKEN set for this backend session.");
+    setHfTokenMessage(
+      rememberRequested
+        ? "HF_TOKEN set and remembered on this machine."
+        : tokenStatus.persistent_configured
+        ? "HF_TOKEN set for this backend session. Existing remembered token is unchanged."
+        : "HF_TOKEN set for this backend session."
+    );
   }
 
   async function clearHfToken() {
@@ -76,12 +85,14 @@ function App() {
     const res = await fetch(`${API}/secrets/hf-token`, { method: "DELETE" });
     const tokenStatus = await res.json();
     setHfTokenInput("");
+    setHfTokenRemember(false);
     setHfTokenStatus(tokenStatus);
-    setHfTokenMessage("HF_TOKEN cleared.");
+    setHfTokenMessage("HF_TOKEN cleared from this backend process and local remembered storage.");
   }
 
   function closeHfTokenDialog() {
     setHfTokenInput("");
+    setHfTokenRemember(false);
     setHfTokenMessage("");
     setHfTokenDialogOpen(false);
   }
@@ -126,6 +137,9 @@ function App() {
             </div>
             <div className="secret-status">
               Status: <strong>{hfTokenStatus.configured ? "set" : "not set"}</strong>
+              <span>Process: {hfTokenStatus.process_configured ? "set" : "not set"}</span>
+              <span>Remembered: {hfTokenStatus.persistent_configured ? "set" : "not set"}</span>
+              <span>Path source: {hfTokenStatus.token_path_source || "dockyard_state"}</span>
             </div>
             <label className="field">
               <span>HF_TOKEN</span>
@@ -137,8 +151,18 @@ function App() {
                 spellCheck="false"
               />
             </label>
+            <label className="check-field">
+              <input
+                type="checkbox"
+                checked={hfTokenRemember}
+                onChange={(event) => setHfTokenRemember(event.target.checked)}
+              />
+              <span>Remember on this machine</span>
+            </label>
             <div className="secret-note">
-              Session/process scoped; re-enter after backend restart.
+              {hfTokenStatus.restart_notice || "Session-only unless remembered on this machine."}
+              {" "}
+              {hfTokenStatus.inheritance_notice || "Set before model pulls or launches."}
             </div>
             {hfTokenMessage && <div className="secret-message">{hfTokenMessage}</div>}
             <div className="actions">

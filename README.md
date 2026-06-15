@@ -28,10 +28,14 @@ cleanup.
 
 Dockyard includes a small Hugging Face token entry flow for local model pulls.
 The UI's `HF Token` control posts a token to the running backend, which strips
-surrounding whitespace and stores it only in that backend process environment as
-`HF_TOKEN`. Status endpoints and the UI show only set/not-set metadata. The raw
-value is not written to profiles, manifests, run state, agent jobs, logs, docs,
-or Git, and it must be re-entered after the backend restarts.
+surrounding whitespace and stores it in that backend process environment as
+`HF_TOKEN`. The dialog also has an explicit `Remember on this machine` option.
+When selected, the backend writes the token only to the configured local secret
+file: `HF_TOKEN_PATH` when set, otherwise Dockyard's git-ignored
+`dockyard/state/secrets/hf_token` path. Status endpoints and the UI show only
+metadata such as process/persistent configured state, a redacted marker, and the
+path source. The raw value is not written to profiles, manifests, run state,
+agent jobs, logs, docs examples, rendered commands, browser storage, or Git.
 
 Hugging Face Hub tooling uses `HF_TOKEN` from environment variables, and some
 libraries read environment state at import or subprocess startup time. Set the

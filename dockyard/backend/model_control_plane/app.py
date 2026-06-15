@@ -50,24 +50,113 @@ class JobCompletionRequest(BaseModel):
 
 class HfTokenRequest(BaseModel):
     token: str
+    remember: bool = False
 
 
 class HfTokenStatus(BaseModel):
     env_var: str
     configured: bool
+    process_configured: bool
+    persistent_configured: bool
     scope: str
     redacted: str
+    token_path_source: str
     restart_notice: str
+    inheritance_notice: str
+
+
+HF_TOKEN_ENV_VAR = "HF_TOKEN"
+HF_TOKEN_PATH_ENV_VAR = "HF_TOKEN_PATH"
+DEFAULT_HF_TOKEN_PATH = ROOT / "state" / "secrets" / "hf_token"
+
+
+def hf_token_path() -> tuple[Path, str]:
+    configured_path = os.environ.get(HF_TOKEN_PATH_ENV_VAR, "").strip()
+    if configured_path:
+        return Path(configured_path).expanduser(), HF_TOKEN_PATH_ENV_VAR
+    return DEFAULT_HF_TOKEN_PATH, "dockyard_state"
+
+
+def secure_secret_parent(path: Path, source: str) -> None:
+    parent = path.parent
+    existed = parent.exists()
+    parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "posix" and (source == "dockyard_state" or not existed):
+        os.chmod(parent, 0o700)
+
+
+def write_persistent_hf_token(token: str) -> None:
+    path, source = hf_token_path()
+    secure_secret_parent(path, source)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(token)
+        handle.write("\n")
+    if os.name == "posix":
+        os.chmod(path, 0o600)
+
+
+def read_persistent_hf_token() -> str | None:
+    path, _source = hf_token_path()
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return token or None
+
+
+def remove_persistent_hf_token() -> None:
+    path, _source = hf_token_path()
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def load_persistent_hf_token_if_needed() -> bool:
+    if os.environ.get(HF_TOKEN_ENV_VAR):
+        return False
+    token = read_persistent_hf_token()
+    if not token:
+        return False
+    os.environ[HF_TOKEN_ENV_VAR] = token
+    return True
+
+
+@app.on_event("startup")
+def load_hf_token_on_startup() -> None:
+    load_persistent_hf_token_if_needed()
 
 
 def hf_token_metadata() -> dict[str, str | bool]:
-    configured = bool(os.environ.get("HF_TOKEN"))
+    load_persistent_hf_token_if_needed()
+    process_configured = bool(os.environ.get(HF_TOKEN_ENV_VAR))
+    persistent_configured = read_persistent_hf_token() is not None
+    configured = process_configured or persistent_configured
+    _path, token_path_source = hf_token_path()
+    if process_configured and persistent_configured:
+        scope = "process_env+persistent_file"
+    elif process_configured:
+        scope = "process_env"
+    elif persistent_configured:
+        scope = "persistent_file"
+    else:
+        scope = "unset"
     return {
-        "env_var": "HF_TOKEN",
+        "env_var": HF_TOKEN_ENV_VAR,
         "configured": configured,
-        "scope": "process_env",
+        "process_configured": process_configured,
+        "persistent_configured": persistent_configured,
+        "scope": scope,
         "redacted": "set" if configured else "unset",
-        "restart_notice": "Session/process scoped; re-enter after backend restart.",
+        "token_path_source": token_path_source,
+        "restart_notice": (
+            "Remembered local token is loaded into HF_TOKEN when the backend starts or status is checked."
+            if persistent_configured
+            else "Session-only unless remembered on this machine; process env is lost on backend restart."
+        ),
+        "inheritance_notice": "Set before model pulls or launches; already-running subprocesses do not inherit changes.",
     }
 
 
@@ -194,13 +283,23 @@ def set_hf_token(request: HfTokenRequest) -> dict[str, str | bool]:
     token = request.token.strip()
     if not token:
         raise HTTPException(status_code=400, detail="HF_TOKEN must not be empty.")
-    os.environ["HF_TOKEN"] = token
+    os.environ[HF_TOKEN_ENV_VAR] = token
+    if request.remember:
+        try:
+            write_persistent_hf_token(token)
+        except OSError as exc:
+            os.environ.pop(HF_TOKEN_ENV_VAR, None)
+            raise HTTPException(status_code=500, detail="Could not persist HF_TOKEN on this machine.") from exc
     return hf_token_metadata()
 
 
 @app.delete("/secrets/hf-token", response_model=HfTokenStatus)
 def clear_hf_token() -> dict[str, str | bool]:
-    os.environ.pop("HF_TOKEN", None)
+    os.environ.pop(HF_TOKEN_ENV_VAR, None)
+    try:
+        remove_persistent_hf_token()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="Could not remove persisted HF_TOKEN from this machine.") from exc
     return hf_token_metadata()
 
 

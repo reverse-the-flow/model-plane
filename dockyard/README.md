@@ -69,20 +69,37 @@ call the recorded function and then complete the job with metadata.
 ## Hugging Face Token Entry
 
 The console has an `HF Token` button for setting `HF_TOKEN` in the running
-backend process environment. The dialog uses a password input and the backend
-returns only safe metadata:
+backend process environment. The dialog uses a password input and has an
+explicit `Remember on this machine` checkbox. By default, the token is
+session/process scoped. When remember is selected, the backend also stores the
+token in a local secret file: `HF_TOKEN_PATH` if configured, otherwise
+`dockyard/state/secrets/hf_token`. The backend creates the app-owned secret
+directory/file with user-only permissions where the platform supports it.
+Existing custom parent directories are not tightened automatically.
+
+The backend returns only safe metadata:
 
 - `env_var: HF_TOKEN`
 - `configured: true` or `false`
-- `scope: process_env`
+- `process_configured: true` or `false`
+- `persistent_configured: true` or `false`
+- `scope: process_env`, `persistent_file`, `process_env+persistent_file`, or `unset`
 - `redacted: set` or `unset`
+- `token_path_source: HF_TOKEN_PATH` or `dockyard_state`
 
-The token is session/process scoped. It is not persisted to disk and must be
-entered again after the backend restarts. Model Plane does not echo the raw
-value from any API, store it in browser storage, write it to profiles, manifests,
-run state, agent job state, logs, docs, or Git, or include it in rendered Docker
-commands. Use `Clear` in the dialog or `DELETE /secrets/hf-token` to remove it
-from the current backend process.
+If a remembered token exists and `HF_TOKEN` is not already set, the backend loads
+the remembered value into `os.environ["HF_TOKEN"]` on startup or the next status
+check so future pull/launch subprocesses can inherit it. A process-level
+`HF_TOKEN` already supplied by the shell wins over the remembered file. Setting a
+new token with remember unchecked updates only the current backend process; any
+existing remembered file is left unchanged until `Clear` removes it or a later
+remembered set overwrites it.
+
+Model Plane does not echo the raw value from any API, store it in browser
+storage, write it to profiles, manifests, run state, agent job state, logs, docs
+examples, or Git, or include it in rendered Docker commands. Use `Clear` in the
+dialog or `DELETE /secrets/hf-token` to remove it from both the current backend
+process and the remembered local token file.
 
 Hugging Face Hub libraries and subprocesses read `HF_TOKEN` from environment
 variables, often at import or startup time. Set the token before starting a model

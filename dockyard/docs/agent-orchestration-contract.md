@@ -41,7 +41,7 @@ An agent may:
   the packet, and complete the job with metadata
 - inspect the redacted `HF_TOKEN` configured/unconfigured status
 - set or clear `HF_TOKEN` only through the explicit human-facing secret endpoint
-  when the user has provided the value for the current backend session
+  when the user has provided the value and persistence choice
 
 An agent must not treat the human UI as the source of truth. The UI is a status
 and inspection surface over the profile and runtime state.
@@ -61,9 +61,9 @@ The backend surface is enough for the run-state MoE bridge:
 | `GET /profiles/{profile_id}/moe-probe-manifest` | Export a pre-launch MoE Run Anyway bridge manifest. | Reads profile data only. |
 | `GET /functions` | List callable Model Plane function descriptors. | Reads the static function catalog. |
 | `GET /functions/{function_id}` | Inspect one callable function descriptor. | Reads the static function catalog. |
-| `GET /secrets/hf-token` | Return redacted `HF_TOKEN` status metadata. | Reads the current backend process environment only. |
-| `POST /secrets/hf-token` | Strip and set `HF_TOKEN` in the running backend process environment. | Writes only to process environment; does not persist or return the token. |
-| `DELETE /secrets/hf-token` | Clear `HF_TOKEN` from the running backend process environment. | Removes only the process environment value. |
+| `GET /secrets/hf-token` | Return redacted `HF_TOKEN` status metadata. | Reads process/persistent configured state; may load a remembered token into `HF_TOKEN` if the process env is unset. |
+| `POST /secrets/hf-token` | Strip and set `HF_TOKEN` in the running backend process environment, optionally remembering it locally. | Writes process env and, only when `remember=true`, the configured local secret file; never returns the token. |
+| `DELETE /secrets/hf-token` | Clear `HF_TOKEN` from the running backend process and remembered local secret file. | Removes process env and the configured local token file. |
 | `GET /cleanup/plan` | List cleanup candidates and proposed run-scoped actions. | Reads `state/runs.json`; no Docker calls or state writes. |
 | `POST /cron/tick` | Create or reuse bounded agent job packets from profiles, runs, and cleanup plan state. | Writes `state/agent_jobs.json`; no Docker, downloads, token use, prompt traffic, model launch, or cleanup execution. |
 | `GET /agent-jobs` | List persisted agent job packets. | Reads `state/agent_jobs.json`. |
@@ -82,20 +82,33 @@ models, inspect tokens, start model servers, or send prompt traffic.
 
 ## Hugging Face Token Boundary
 
-Model Plane supports a small session-scoped Hugging Face token flow. The UI
-dialog accepts `HF_TOKEN` through a password input and posts it to the backend.
-The backend strips surrounding whitespace, rejects an empty value, and stores the
-token only in `os.environ["HF_TOKEN"]` for the running backend process.
+Model Plane supports a Hugging Face token flow that is session-only by default
+and locally persistent only when explicitly requested. The UI dialog accepts
+`HF_TOKEN` through a password input, includes a `Remember on this machine`
+checkbox, and posts `{ token, remember }` to the backend. The backend strips
+surrounding whitespace, rejects an empty value, and stores the token in
+`os.environ["HF_TOKEN"]` for the running backend process. When `remember=true`,
+it also writes the token to `HF_TOKEN_PATH` when configured, otherwise to
+Dockyard's git-ignored `dockyard/state/secrets/hf_token` path. The app-owned
+secret directory/file are created with user-only permissions where supported.
 
-The secret endpoints return only metadata: `env_var`, `configured`, `scope`, a
-redacted set/unset marker, and a restart notice. They never echo or return the
-raw token. The frontend does not use `localStorage` or `sessionStorage` for this
-value and clears the input after a successful set.
+On backend startup or the next `GET /secrets/hf-token` status check, a remembered
+token is loaded into `os.environ["HF_TOKEN"]` only when the process environment
+does not already contain `HF_TOKEN`. A shell-provided process value has priority
+over the remembered file. Setting a token with `remember=false` updates only the
+current backend process and leaves any existing remembered file unchanged.
+`DELETE /secrets/hf-token` clears both the current process environment value and
+the configured remembered local token file.
 
-The token is not persisted to disk and must be entered again after the backend
-restarts. It must not appear in profiles, manifests, rendered Docker commands,
-run state, agent job state, cron packets, logs, docs examples, test output, or
-Git. Hugging Face Hub libraries and model pull subprocesses read `HF_TOKEN` from
+The secret endpoints return only metadata: `env_var`, `configured`,
+`process_configured`, `persistent_configured`, `scope`, a redacted set/unset
+marker, `token_path_source`, restart notes, and inheritance notes. They never
+echo or return the raw token. The frontend does not use `localStorage` or
+`sessionStorage` for this value and clears the input after set, clear, or close.
+
+The token must not appear in profiles, manifests, rendered Docker commands, run
+state, agent job state, cron packets, logs, docs examples, test output, or Git.
+Hugging Face Hub libraries and model pull subprocesses read `HF_TOKEN` from
 environment variables, often at import or subprocess startup time, so the token
 should be present before those subprocesses or imports begin.
 

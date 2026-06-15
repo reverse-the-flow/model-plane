@@ -38,6 +38,7 @@ class CallableFunctionsTests(unittest.TestCase):
             )
         )
         self.assertEqual(by_id["profile.validate"]["path_template"], "/profiles/{profile_id}/validate")
+        self.assertEqual(by_id["secret.hf_token.set"]["default_body"], {"token": "", "remember": False})
         self.assertIn("return_secret_values", by_id["secret.hf_token.set"]["forbidden_actions"])
         self.assertIn("persist_secret_values", by_id["secret.hf_token.status"]["forbidden_actions"])
 

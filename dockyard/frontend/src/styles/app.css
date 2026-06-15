@@ -92,6 +92,8 @@ pre {
   margin-bottom: 12px;
 }
 .secret-status {
+  display: grid;
+  gap: 4px;
   border: 1px solid #555c61;
   border-radius: 6px;
   padding: 8px 10px;
@@ -99,6 +101,9 @@ pre {
   color: #a8a39b;
 }
 .secret-status strong { color: #e6e1d8; }
+.secret-status span {
+  font-size: 13px;
+}
 .field {
   display: grid;
   gap: 6px;
@@ -121,6 +126,19 @@ input {
 input:focus {
   outline: none;
   border-color: #c9a968;
+}
+.check-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: #e6e1d8;
+  font-size: 13px;
+}
+.check-field input {
+  width: 16px;
+  min-height: 16px;
+  accent-color: #c9a968;
 }
 .secret-note, .secret-message {
   margin-bottom: 12px;
