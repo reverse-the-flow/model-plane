@@ -16,6 +16,7 @@ def profile_fixture() -> dict:
         "name": "Local llama.cpp",
         "model": {"id": "local/example", "local_path": "/models/example.gguf"},
         "runtime": {"backend": "llama_cpp", "image": "example:1", "args": []},
+        "network": {"mode": "local_only"},
         "container": {
             "name": "dockyard-llama-local",
             "host_port": 18080,
@@ -53,11 +54,29 @@ class RunApiTests(unittest.TestCase):
         routes = {route.path for route in app_module.app.routes}
 
         self.assertIn("/cleanup/plan", routes)
+        self.assertIn("/network/modes", routes)
+        self.assertIn("/moe-test-cards", routes)
+        self.assertIn("/moe-test-cards/{card_id}/preflight", routes)
+        self.assertIn("/moe-test-cards/{card_id}/smoke", routes)
         self.assertIn("/runs", routes)
         self.assertIn("/runs/{run_id}", routes)
+        self.assertIn("/runs/{run_id}/status", routes)
         self.assertIn("/runs/{run_id}/health", routes)
         self.assertIn("/runs/{run_id}/moe-probe-manifest", routes)
+        self.assertIn("/runs/{run_id}/integration-bundle", routes)
+        self.assertIn("/runs/{run_id}/integration-bundle/check", routes)
+        self.assertIn("/runs/{run_id}/stop", routes)
         self.assertIn("/runs/{run_id}/cleanup", routes)
+        self.assertIn("/profiles/{profile_id}/integration-preview", routes)
+
+    def test_render_command_skips_gpu_request_for_cpu_profile(self) -> None:
+        selected = profile_fixture()
+        selected["container"]["gpu"] = "none"
+
+        command = app_module.render_command(selected)
+
+        self.assertNotIn("--gpus", command)
+        self.assertIn("127.0.0.1:18080:8080", command)
 
     def test_launch_records_failed_docker_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

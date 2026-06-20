@@ -1,0 +1,67 @@
+id: dolphin-mixtral-8x7b-llama-sidecar
+name: Dolphin Mixtral 8x7B llama.cpp Sidecar
+version: 1
+model:
+  id: dolphin-mixtral-8x7b
+  local_path: /mnt/Calliope/models/dolphin-mixtral-8x7b.gguf
+  source: user-staged-gguf
+  quant: gguf
+runtime:
+  backend: llama_cpp
+  image: memory-moe-llama-sidecar:latest
+  command: []
+  args:
+    - -m
+    - /models/dolphin-mixtral-8x7b.gguf
+    - --ctx-size
+    - "512"
+    - --n-gpu-layers
+    - "0"
+    - --no-mmap
+    - --metrics
+    - --slots
+    - --props
+    - --perf
+    - --log-file
+    - /logs/dolphin-mixtral-8x7b.log
+    - --log-prefix
+    - --log-timestamps
+    - --verbosity
+    - "4"
+network:
+  mode: private_trusted_lan
+  bind_host: 0.0.0.0
+  auth: none
+  mdns: true
+  advertise: true
+container:
+  name: dockyard-moe-dolphin-mixtral-sidecar
+  host_port: 18080
+  internal_port: 8080
+  gpu: none
+  shm_size: 16gb
+  volumes:
+    - /mnt/Calliope/models:/models:ro
+    - /home/codexlab/model-plane-runtime/logs/llama-cpp:/logs
+    - /home/codexlab/model-plane-runtime/logs/moe-sidecar:/var/log/memory-moe-sidecar
+  env:
+    SIDECAR_LABEL: dolphin-mixtral-8x7b-sidecar-cpu-baseline
+    SIDECAR_EXTRA_ARGS: --capture-upstream-observability
+health:
+  url: http://127.0.0.1:18080/health
+logs:
+  file_path: /home/codexlab/model-plane-runtime/logs/llama-cpp/dolphin-mixtral-8x7b.log
+  container_path: /logs/dolphin-mixtral-8x7b.log
+moe_probe:
+  primary_probe_hint: passive_sidecar_plus_llama_runtime_probe
+  semantic_expert_ids: not_exposed
+  passive_sidecar_requested: true
+  log_file_path: /home/codexlab/model-plane-runtime/logs/llama-cpp/dolphin-mixtral-8x7b.log
+  container_log_file_path: /logs/dolphin-mixtral-8x7b.log
+  observability_paths:
+    - /metrics
+    - /slots
+    - /props
+    - /perf
+  readiness_paths:
+    - /health

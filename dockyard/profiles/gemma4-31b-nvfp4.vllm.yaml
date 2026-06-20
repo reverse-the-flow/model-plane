@@ -26,6 +26,12 @@ runtime:
     - "32768"
     - --gpu-memory-utilization
     - "0.92"
+network:
+  mode: private_trusted_lan
+  bind_host: 0.0.0.0
+  auth: none
+  mdns: true
+  advertise: true
 container:
   name: dockyard-gemma4-31b-nvfp4
   host_port: 18001

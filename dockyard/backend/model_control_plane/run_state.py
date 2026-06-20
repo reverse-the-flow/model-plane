@@ -14,6 +14,8 @@ from .moe_probe_manifest import (
     primary_probe_hint,
     semantic_expert_ids_status,
 )
+from .network_policy import network_policy_summary, rewrite_local_url_for_policy
+from .profile_types import capsule_client_base_url, capsule_endpoint_id, is_capsule_gateway_profile, profile_health_url, profile_model_id
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNS_PATH = ROOT / "state" / "runs.json"
@@ -108,6 +110,9 @@ def initial_run_record(profile: dict[str, Any], command: list[str]) -> dict[str,
     model = profile.get("model", {})
     container = profile.get("container", {})
     moe_probe = profile.get("moe_probe", {})
+    capsule_gateway = is_capsule_gateway_profile(profile)
+    base_url = capsule_client_base_url(profile) if capsule_gateway else rewrite_local_url_for_policy(profile, endpoint_base_url(profile))
+    model_id = profile_model_id(profile) or model.get("id")
     launch = {
         "command": command,
         "shell_command": shell_command,
@@ -122,11 +127,15 @@ def initial_run_record(profile: dict[str, Any], command: list[str]) -> dict[str,
         "created_at": created_at,
         "updated_at": created_at,
         "status": "launching",
+        "service_type": "capsule_gateway" if capsule_gateway else "container_runtime",
+        "network": network_policy_summary(profile),
+        "endpoint_id": capsule_endpoint_id(profile),
         "container_name": container.get("name"),
-        "base_url": endpoint_base_url(profile),
-        "health_url": profile.get("health", {}).get("url"),
+        "base_url": base_url,
+        "client_base_url": base_url,
+        "health_url": profile_health_url(profile),
         "log_file_path": log_file_path(profile),
-        "model_id": model.get("id"),
+        "model_id": model_id,
         "model_path": model.get("local_path"),
         "backend_family": backend_family(profile),
         "primary_probe_hint": primary_probe_hint(profile),
@@ -140,6 +149,8 @@ def initial_run_record(profile: dict[str, Any], command: list[str]) -> dict[str,
         "launch_stderr": None,
         "launch": launch,
         "last_health_result": None,
+        "process_pid": None,
+        "last_stop_result": None,
     }
 
 
@@ -183,6 +194,28 @@ def record_launch_exception(run_id: str, error: str, path: Path | None = None) -
     return save_run(run, path)
 
 
+def record_process_launch_result(
+    run_id: str,
+    pid: int,
+    stdout: str | None = None,
+    stderr: str | None = None,
+    path: Path | None = None,
+) -> dict[str, Any] | None:
+    run = get_run(run_id, path)
+    if run is None:
+        return None
+    run["updated_at"] = utc_now()
+    run["status"] = "launched"
+    run["process_pid"] = pid
+    run["launch_returncode"] = 0
+    run["launch_stdout"] = stdout
+    run["launch_stderr"] = stderr
+    launch = dict(run.get("launch") or {})
+    launch.update({"returncode": 0, "stdout": stdout, "stderr": stderr, "pid": pid})
+    run["launch"] = launch
+    return save_run(run, path)
+
+
 def record_health_result(run_id: str, result: dict[str, Any], path: Path | None = None) -> dict[str, Any] | None:
     run = get_run(run_id, path)
     if run is None:
@@ -192,6 +225,28 @@ def record_health_result(run_id: str, result: dict[str, Any], path: Path | None 
     run["updated_at"] = checked["checked_at"]
     run["last_health_result"] = checked
     run["status"] = "healthy" if checked.get("ok") is True else "unhealthy"
+    return save_run(run, path)
+
+
+def record_stop_result(run_id: str, result: dict[str, Any], path: Path | None = None) -> dict[str, Any] | None:
+    run = get_run(run_id, path)
+    if run is None:
+        return None
+    recorded = dict(result)
+    recorded_at = utc_now()
+    recorded["recorded_at"] = recorded_at
+    history = run.get("stop_history")
+    if not isinstance(history, list):
+        history = []
+    history.append(recorded)
+    run["updated_at"] = recorded_at
+    run["stop_status"] = recorded.get("action")
+    run["last_stop_result"] = recorded
+    run["stop_history"] = history
+    if recorded.get("ok") is True:
+        run["status"] = "stopped"
+    else:
+        run["status"] = "stop_failed"
     return save_run(run, path)
 
 

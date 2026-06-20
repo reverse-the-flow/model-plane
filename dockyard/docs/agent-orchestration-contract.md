@@ -28,13 +28,17 @@ An agent may:
 - call launch only when the user has authorized starting a local runtime
 - inspect the returned `run_id` and persisted run record
 - check run health through the run's explicit health URL
+- inspect run lifecycle status and the OpenAI-compatible client base URL
 - pass along run log references when they exist
 - export a run-scoped MoE probe manifest for MoE Run Anyway
+- export a run-scoped Hermes/OpenClaw harness integration bundle
 - hand the manifest to the MoE Run Anyway planner instead of asking the user to
   copy base URLs, ports, model ids, or log paths manually
 - ask Model Plane for a dry-run cleanup plan before changing any runtime state
 - record run-scoped cleanup review notes, or explicitly request removal of only
   the concrete `dockyard-*` container recorded on a run
+- request a run-scoped stop only when the user has authorized stopping that
+  concrete managed process or `dockyard-*` container
 - call the cron tick entrypoint to create bounded review packets from current
   profile and run state
 - inspect agent jobs, call only the Model Plane function descriptor recorded on
@@ -55,10 +59,12 @@ The backend surface is enough for the run-state MoE bridge:
 | `GET /profiles` | List saved profile summaries, validation counts, ports, health URLs. | Reads local profile files. |
 | `GET /profiles/{profile_id}` | Read the full profile. | Reads one local profile. |
 | `POST /profiles/{profile_id}/validate` | Return profile errors and warnings. | Reads local paths for validation only. |
-| `POST /profiles/{profile_id}/render` | Return Docker command as an argv list and shell string. | Does not start Docker. |
-| `POST /profiles/{profile_id}/launch` | Create a persisted run record, then launch the rendered runtime command. | Starts Docker only when explicitly called. Failed Docker commands still leave an inspectable run id. |
+| `POST /profiles/{profile_id}/render` | Return the launch command as an argv list and shell string. | Does not start Docker or local processes. |
+| `POST /profiles/{profile_id}/launch` | Create a persisted run record, then launch the rendered runtime command. | Starts Docker or a configured local process only when explicitly called. Failed commands still leave an inspectable run id. |
 | `POST /profiles/{profile_id}/health` | Probe the configured health URL. | Sends a health request only. |
+| `GET /profiles/{profile_id}/integration-preview` | Export a pre-launch Hermes/OpenClaw integration preview. | Reads profile data only. |
 | `GET /profiles/{profile_id}/moe-probe-manifest` | Export a pre-launch MoE Run Anyway bridge manifest. | Reads profile data only. |
+| `GET /network/modes` | List supported network postures for launch profiles. | Reads static mode descriptors only. |
 | `GET /functions` | List callable Model Plane function descriptors. | Reads the static function catalog. |
 | `GET /functions/{function_id}` | Inspect one callable function descriptor. | Reads the static function catalog. |
 | `GET /secrets/hf-token` | Return redacted `HF_TOKEN` status metadata. | Reads process/persistent configured state; may load a remembered token into `HF_TOKEN` if the process env is unset. |
@@ -71,14 +77,71 @@ The backend surface is enough for the run-state MoE bridge:
 | `POST /agent-jobs/{job_id}/complete` | Record completion metadata for one job. | Writes result metadata only. |
 | `GET /runs` | List persisted run records. | Reads `state/runs.json`. |
 | `GET /runs/{run_id}` | Inspect one persisted run record. | Reads `state/runs.json`. |
+| `GET /runs/{run_id}/status` | Return lifecycle status, managed process status, latest health metadata, and client base URL. | Reads run state; may inspect the recorded process PID. |
 | `POST /runs/{run_id}/health` | Probe the run's explicit health URL and persist the result. | Sends a health request only. |
 | `GET /runs/{run_id}/moe-probe-manifest` | Export the MoE Run Anyway bridge manifest for one concrete run. | Reads run state and profile data only. |
+| `GET /runs/{run_id}/integration-bundle` | Export a run-scoped Hermes/OpenClaw integration bundle. | Reads run state and profile data only. |
+| `POST /runs/{run_id}/integration-bundle/check` | Probe host and Docker harness `/v1/models` URLs for a run-scoped integration bundle. | Sends readiness requests only; no prompt traffic or config writes. |
+| `POST /runs/{run_id}/stop` | Stop one run-scoped managed process PID or `dockyard-*` container. | Stops only the concrete process/container recorded on the run and only when explicitly called. |
 | `POST /runs/{run_id}/cleanup` | Persist cleanup review metadata and optionally remove the run's concrete container. | Calls `docker rm -f` only when `remove_container=true` and the recorded container name starts with `dockyard-`. |
 | `POST /containers/{container_name}/stop` | Stop a Dockyard-managed container. | Stops containers whose names start with `dockyard-`. |
 
 The run-scoped manifest endpoint is the preferred integration point for MoE Run
 Anyway after launch. Manifest export does not launch containers, download
 models, inspect tokens, start model servers, or send prompt traffic.
+
+The run-scoped integration bundle endpoint is the preferred integration point
+for Hermes, OpenClaw, and similar harnesses. Bundle export does not write
+harness config files. Connectivity checks call only `/v1/models` on host and
+Docker harness URL variants.
+
+## Network Postures
+
+Profiles can declare a top-level `network` block. If omitted, Model Plane uses
+`private_trusted_lan`: bind on `0.0.0.0`, no auth, mDNS-style `.local`
+advertising, and a LAN-friendly client URL for nearby tools. `local_only` binds
+on `127.0.0.1`, disables advertising, and includes an SSH tunnel hint for agents
+operating through a remote shell. `secured_remote` is exposed as a future
+hardening target for token/Tailscale/TLS-style deployments and currently
+validates with a warning.
+
+Agents should read the profile/run `network` summary or call `GET
+/network/modes` instead of inventing their own bind-host rules. Network mode
+selection changes where the runtime is exposed; it does not grant permission to
+launch, stop, send prompts, write harness config, move model weights, or inspect
+runtime state.
+
+## Session Capsule Gateway Boundary
+
+`runtime.backend: capsule_gateway` profiles supervise the Session Capsule
+Gateway as a local process. Model Plane renders the gateway command, starts the
+process, records its PID, health-checks `/api/capsules/status`, reports the
+OpenAI-compatible `/v1` client base URL, and can stop only that recorded process
+PID.
+
+Model Plane does not become the gateway. It does not transport model weights,
+store live KV tensors, manipulate runtime slots, checkpoint or resume capsules,
+or run transcript replay. The Session Capsule Gateway owns the request path,
+ledger lookup, restore/checkpoint behavior, transcript diffs, fallback replay,
+and capsule API endpoints. The model runtime owns model weights,
+tokenizer/runtime internals, live KV cache, slots, and generation. Hard capsules
+are runtime-specific local snapshots; transcript replay fallback must remain
+available when a hard snapshot cannot be used.
+
+## Capsule Handoff Tray Boundary
+
+The Capsule Handoff Tray is a separate local helper, not a Model Plane runtime
+owner. It binds to `127.0.0.1` by default and may start at user login. Its only
+job is to receive capsule bundles, verify signatures/checksums, stage them in a
+local tray directory, and hand one bundle to a Session Capsule Gateway through
+`/api/capsules/handoff`.
+
+Agents may call the tray only for capsule import, pending-list inspection,
+attach, reject, or expire actions. They must not use it as a general file
+transfer service, remote capsule browser, model-weight mover, live KV transport,
+or prompt-sending channel. Handoff packets must include launch/runtime metadata
+when available. Hard restore requires an exact launch-card/runtime match;
+non-exact targets use transcript replay only.
 
 ## Hugging Face Token Boundary
 
@@ -117,6 +180,14 @@ The function catalog exposes:
 - `secret.hf_token.status`: cron-readable redacted status only.
 - `secret.hf_token.set`: not allowed for cron.
 - `secret.hf_token.clear`: not allowed for cron.
+- `run.status`: cron-readable run lifecycle and client URL status.
+- `run.stop`: not allowed for cron; stopping requires explicit operator
+  authorization.
+- `profile.integration_preview.export`: pre-launch Hermes/OpenClaw preview.
+- `run.integration_bundle.export`: run-scoped Hermes/OpenClaw export.
+- `run.integration_bundle.check`: host and Docker-context `/v1/models`
+  reachability check.
+- `network.modes`: static network posture descriptors.
 
 All secret descriptors forbid logging, persisting, echoing, returning, or
 including secret values in manifests, job state, or rendered commands.
@@ -128,12 +199,16 @@ Run state is persisted in `dockyard/state/runs.json` with schema version
 
 - `run_id`, `profile_id`, and `profile_name`
 - `created_at`, `updated_at`, and `status`
-- `container_name`, `base_url`, `health_url`, and `log_file_path` when available
+- `service_type`, optional `endpoint_id`, `container_name`, `process_pid`,
+  `base_url`, `client_base_url`, `health_url`, and `log_file_path` when
+  available
 - `model_id`, `model_path`, and `backend_family`
 - `launch_command`, `launch_shell_command`, `launch_returncode`,
   `launch_stdout`, and `launch_stderr`
 - grouped `launch` details for human inspection
 - `last_health_result` after `POST /runs/{run_id}/health`
+- `last_stop_result`, `stop_status`, and `stop_history` after
+  `POST /runs/{run_id}/stop`
 - `last_cleanup_result`, `cleanup_status`, `cleanup_reviewed_at`, and
   `cleanup_history` after `POST /runs/{run_id}/cleanup`
 
@@ -191,6 +266,8 @@ Current job types are:
   `POST /runs/{run_id}/health`.
 - `moe_probe_plan`: export `GET /runs/{run_id}/moe-probe-manifest` and pass it
   to MoE Run Anyway in plan/review mode.
+- `integration_bundle_export`: export `GET /runs/{run_id}/integration-bundle`
+  for a healthy run so Hermes/OpenClaw config can be copied or agent-applied.
 - `cleanup_review`: record run-scoped cleanup review metadata through
   `POST /runs/{run_id}/cleanup` with `remove_container=false`.
 
@@ -198,7 +275,9 @@ Every cron-created job forbids model downloads, token use, Docker prune, broad
 deletion, unapproved prompt traffic, unapproved model launches, and model server
 startup. Cleanup packets additionally forbid unapproved `docker rm` and run
 record deletion. MoE probe packets additionally forbid probe prompt traffic and
-sidecar startup without explicit operator approval.
+sidecar startup without explicit operator approval. Integration bundle packets
+forbid prompt traffic, token use, direct Hermes/OpenClaw config writes, and
+unrelated service changes.
 
 ## Cron Heartbeat
 
@@ -299,6 +378,24 @@ OpenAI-compatible endpoints provide runtime evidence, not semantic expert ids.
 Semantic expert ids require a hookable local runtime or future backend patch
 that exposes router outputs.
 
+## Harness Integration Bundle Fields
+
+`GET /runs/{run_id}/integration-bundle` returns
+`schema_version: model-plane-harness-integration-bundle-v1` and the small set of
+fields Hermes/OpenClaw-style harnesses need:
+
+- run/profile/model/backend identifiers
+- stable `alias`, display name, provider kind, and preferred `/v1` base URL
+- host and Docker harness URL variants plus `/v1/models` connectivity targets
+- health URL and latest health result
+- Hermes and OpenClaw snippets as structured JSON plus YAML/text
+- connectivity checks and summary when `POST .../check` has been called
+- provenance and safety notes
+
+If a linked Session Capsule Gateway is healthy, its `/v1` endpoint is preferred
+and the raw runtime endpoint is retained as `raw_runtime_base_url`. The bundle is
+export-only: Model Plane does not modify Hermes/OpenClaw files.
+
 ### llama.cpp MoE Observability
 
 For MoE Run Anyway compatibility, a `llama.cpp` profile should expose the stock
@@ -337,9 +434,10 @@ tokens, or sending prompt traffic.
 ## What Remains Manual
 
 Model Plane is now durable enough for an agent to launch with user authorization,
-inspect a run id, check health, and hand an exact run manifest to MoE Run
-Anyway. The remaining manual surface is intentional authorization and local
-operator judgment: selecting which profile to launch, confirming that starting a
-container is acceptable, reading logs outside known log paths, and deciding
-whether to stop a `dockyard-` container. Deeper UI customization can layer on top
-of this contract without changing the agent run-state loop.
+inspect a run id, check health, report client URLs, and hand an exact run
+manifest to MoE Run Anyway. The remaining manual surface is intentional
+authorization and local operator judgment: selecting which profile to launch,
+confirming that starting a container or process is acceptable, reading logs
+outside known log paths, and deciding whether to stop a recorded process PID or
+`dockyard-` container. Deeper UI customization can layer on top of this contract
+without changing the agent run-state loop.

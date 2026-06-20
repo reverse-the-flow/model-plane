@@ -3,25 +3,35 @@ name: Nemotron Omni NVFP4 vLLM
 version: 1
 model:
   id: nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
-  local_path: /mnt/Calliope/models/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
+  local_path: /mnt/Calliope/models/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4-hf
   source: huggingface-local
   card_url: https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
   quant: nvfp4
 runtime:
   backend: vllm
   image: vllm/vllm-openai:v0.20.0
-  command: [bash, -lc]
+  command: []
   args:
-    - >-
-      pip install 'vllm[audio]' &&
-      vllm serve /model
-      --served-model-name nemotron_3_nano_omni
-      --host 0.0.0.0
-      --port 8000
-      --trust-remote-code
-      --max-model-len 32768
-      --gpu-memory-utilization 0.92
-      --limit-mm-per-prompt '{"video": 1, "image": 1, "audio": 1}'
+    - /model
+    - --served-model-name
+    - nemotron_3_nano_omni
+    - --host
+    - 0.0.0.0
+    - --port
+    - "8000"
+    - --trust-remote-code
+    - --max-model-len
+    - "32768"
+    - --gpu-memory-utilization
+    - "0.55"
+    - --limit-mm-per-prompt
+    - '{"video": 1, "image": 1, "audio": 1}'
+network:
+  mode: private_trusted_lan
+  bind_host: 0.0.0.0
+  auth: none
+  mdns: true
+  advertise: true
 container:
   name: dockyard-nemotron-omni-nvfp4
   host_port: 18002
@@ -29,9 +39,8 @@ container:
   gpu: all
   shm_size: 16g
   volumes:
-    - /mnt/Calliope/models/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4:/model:ro
-    - /mnt/Calliope/models/.cache/huggingface:/root/.cache/huggingface
+    - /mnt/Calliope/models/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4-hf:/model:ro
   env:
-    HF_HOME: /root/.cache/huggingface
+    HF_HOME: /tmp/huggingface
 health:
   url: http://127.0.0.1:18002/v1/models

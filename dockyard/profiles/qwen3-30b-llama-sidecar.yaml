@@ -1,0 +1,67 @@
+id: qwen3-30b-llama-sidecar
+name: Qwen3 30B llama.cpp Sidecar
+version: 1
+model:
+  id: qwen3-30b
+  local_path: /mnt/Calliope/models/qwen3-30b.gguf
+  source: user-staged-gguf
+  quant: gguf
+runtime:
+  backend: llama_cpp
+  image: memory-moe-llama-sidecar:latest
+  command: []
+  args:
+    - -m
+    - /models/qwen3-30b.gguf
+    - --ctx-size
+    - "512"
+    - --n-gpu-layers
+    - "0"
+    - --no-mmap
+    - --metrics
+    - --slots
+    - --props
+    - --perf
+    - --log-file
+    - /logs/qwen3-30b.log
+    - --log-prefix
+    - --log-timestamps
+    - --verbosity
+    - "4"
+network:
+  mode: private_trusted_lan
+  bind_host: 0.0.0.0
+  auth: none
+  mdns: true
+  advertise: true
+container:
+  name: dockyard-moe-qwen3-30b-sidecar
+  host_port: 18081
+  internal_port: 8080
+  gpu: none
+  shm_size: 16gb
+  volumes:
+    - /mnt/Calliope/models:/models:ro
+    - /home/codexlab/model-plane-runtime/logs/llama-cpp:/logs
+    - /home/codexlab/model-plane-runtime/logs/moe-sidecar:/var/log/memory-moe-sidecar
+  env:
+    SIDECAR_LABEL: qwen3-30b-sidecar-cpu-baseline
+    SIDECAR_EXTRA_ARGS: --capture-upstream-observability
+health:
+  url: http://127.0.0.1:18081/health
+logs:
+  file_path: /home/codexlab/model-plane-runtime/logs/llama-cpp/qwen3-30b.log
+  container_path: /logs/qwen3-30b.log
+moe_probe:
+  primary_probe_hint: passive_sidecar_plus_llama_runtime_probe
+  semantic_expert_ids: not_exposed
+  passive_sidecar_requested: true
+  log_file_path: /home/codexlab/model-plane-runtime/logs/llama-cpp/qwen3-30b.log
+  container_log_file_path: /logs/qwen3-30b.log
+  observability_paths:
+    - /metrics
+    - /slots
+    - /props
+    - /perf
+  readiness_paths:
+    - /health

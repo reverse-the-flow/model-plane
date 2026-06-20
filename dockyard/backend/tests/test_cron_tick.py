@@ -98,6 +98,8 @@ class CronTickTests(unittest.TestCase):
             self.assertIn(healthy["run_id"], by_type["run_health_check"])
             self.assertIn(launched["run_id"], by_type["moe_probe_plan"])
             self.assertIn(healthy["run_id"], by_type["moe_probe_plan"])
+            self.assertIn(healthy["run_id"], by_type["integration_bundle_export"])
+            self.assertNotIn(launched["run_id"], by_type["integration_bundle_export"])
 
             payloads = {job["job_type"]: job["payload"] for job in result["created_jobs"]}
             self.assertEqual(payloads["profile_validate"]["function_id"], "profile.validate")
@@ -106,6 +108,33 @@ class CronTickTests(unittest.TestCase):
             self.assertEqual(payloads["run_health_check"]["call"]["method"], "POST")
             self.assertEqual(payloads["moe_probe_plan"]["function_id"], "run.moe_probe_manifest.export")
             self.assertEqual(payloads["moe_probe_plan"]["call"]["method"], "GET")
+            self.assertEqual(payloads["integration_bundle_export"]["function_id"], "run.integration_bundle.export")
+            self.assertEqual(payloads["integration_bundle_export"]["call"]["method"], "GET")
+
+    def test_cron_tick_creates_integration_bundle_export_job_only_after_health_succeeds(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runs_path = Path(temp_dir) / "runs.json"
+            jobs_path = Path(temp_dir) / "agent_jobs.json"
+            with (
+                mock.patch.object(run_state, "RUNS_PATH", runs_path),
+                mock.patch.object(orchestration_jobs, "JOBS_PATH", jobs_path),
+                mock.patch.object(app_module, "all_profiles", return_value=[profile_fixture()]),
+            ):
+                launched = run_state.create_run(profile_fixture(), ["docker", "run", "example"])
+                run_state.record_launch_result(launched["run_id"], 0, "container-id", "")
+                healthy = run_state.create_run(profile_fixture(), ["docker", "run", "example"])
+                run_state.record_health_result(healthy["run_id"], {"ok": True, "status": 200})
+
+                result = app_module.run_cron_tick()
+
+            integration_jobs = [job for job in result["created_jobs"] if job["job_type"] == "integration_bundle_export"]
+            self.assertEqual(len(integration_jobs), 1)
+            self.assertEqual(integration_jobs[0]["run_id"], healthy["run_id"])
+            self.assertEqual(integration_jobs[0]["payload"]["function_id"], "run.integration_bundle.export")
+            self.assertEqual(integration_jobs[0]["payload"]["call"]["path"], f"/runs/{healthy['run_id']}/integration-bundle")
+            stored = orchestration_jobs.get_job(integration_jobs[0]["job_id"], jobs_path)
+            self.assertIn("write_harness_config_files", stored["forbidden_actions"])
+            self.assertIn("send_prompt_traffic", stored["forbidden_actions"])
 
     def test_cron_tick_is_idempotent_while_jobs_are_open(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

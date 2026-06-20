@@ -27,6 +27,12 @@ runtime:
     - --perf
     - --log-file
     - /logs/llama-cpp-example.log
+network:
+  mode: private_trusted_lan
+  bind_host: 0.0.0.0
+  auth: none
+  mdns: true
+  advertise: true
 container:
   name: dockyard-llama-cpp-example
   host_port: 18080

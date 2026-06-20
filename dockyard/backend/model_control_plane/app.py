@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import signal
 import subprocess
 import urllib.request
 from datetime import datetime, timezone
@@ -14,8 +15,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from . import callable_functions, cron_tick as cron_tick_planner
+from . import moe_test_cards
 from . import orchestration_jobs, run_state
+from .harness_integrations import build_harness_integration_bundle, check_harness_connectivity
 from .moe_probe_manifest import backend_family, build_moe_probe_manifest, build_run_moe_probe_manifest
+from .network_policy import network_bind_host, network_mode_descriptors, network_policy_summary, validate_network_policy
+from .profile_types import (
+    capsule_client_base_url,
+    capsule_gateway_cwd,
+    capsule_healthcheck_url,
+    is_capsule_gateway_profile,
+    profile_health_url,
+    profile_host_port,
+    profile_model_id,
+    render_capsule_gateway_command,
+    validate_capsule_gateway_profile,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 PROFILES = ROOT / "profiles"
@@ -23,7 +38,7 @@ PROFILES = ROOT / "profiles"
 app = FastAPI(title="Model Control Plane", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:19111", "http://localhost:19111"],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -39,6 +54,11 @@ class CleanupRequest(BaseModel):
     notes: str | None = None
 
 
+class StopRunRequest(BaseModel):
+    timeout_seconds: int = 10
+    notes: str | None = None
+
+
 class CronTickRequest(BaseModel):
     health_stale_seconds: int = cron_tick_planner.DEFAULT_HEALTH_STALE_SECONDS
 
@@ -51,6 +71,10 @@ class JobCompletionRequest(BaseModel):
 class HfTokenRequest(BaseModel):
     token: str
     remember: bool = False
+
+
+class MoeTestSmokeRequest(BaseModel):
+    approved_prompt_traffic: bool = False
 
 
 class HfTokenStatus(BaseModel):
@@ -181,7 +205,9 @@ def load_profile(profile_id: str) -> dict[str, Any]:
 
 
 def validate_profile(profile: dict[str, Any]) -> list[dict[str, str]]:
-    messages: list[dict[str, str]] = []
+    if is_capsule_gateway_profile(profile):
+        return validate_capsule_gateway_profile(profile)
+    messages: list[dict[str, str]] = validate_network_policy(profile)
     image = profile.get("runtime", {}).get("image", "")
     name = profile.get("container", {}).get("name", "")
     model_path = profile.get("model", {}).get("local_path")
@@ -235,14 +261,19 @@ def validate_profile(profile: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def render_command(profile: dict[str, Any]) -> list[str]:
+    if is_capsule_gateway_profile(profile):
+        return render_capsule_gateway_command(profile)
     runtime = profile["runtime"]
     container = profile["container"]
     command = [
-        "docker", "run", "--rm", "-d",
+        "docker", "run", "-d",
         "--name", container["name"],
-        "--gpus", str(container.get("gpu", "all")),
-        "-p", f"127.0.0.1:{container['host_port']}:{container['internal_port']}",
     ]
+    gpu = container.get("gpu", "all")
+    gpu_value = "" if gpu is None else str(gpu).strip()
+    if gpu_value and gpu_value.lower() not in {"none", "false", "0"}:
+        command += ["--gpus", gpu_value]
+    command += ["-p", f"{network_bind_host(profile)}:{container['host_port']}:{container['internal_port']}"]
     if container.get("shm_size"):
         command += ["--shm-size", str(container["shm_size"])]
     for key, value in container.get("env", {}).items():
@@ -311,15 +342,54 @@ def profiles() -> list[dict[str, Any]]:
         rows.append({
             "id": profile["id"],
             "name": profile["name"],
-            "backend": profile["runtime"]["backend"],
-            "model_id": profile["model"]["id"],
-            "image": profile["runtime"].get("image"),
-            "host_port": profile["container"]["host_port"],
-            "health_url": profile["health"]["url"],
+            "backend": profile.get("runtime", {}).get("backend") or profile.get("profile_type"),
+            "model_id": profile_model_id(profile),
+            "image": profile.get("runtime", {}).get("image"),
+            "host_port": profile_host_port(profile),
+            "health_url": profile_health_url(profile),
+            "client_base_url": capsule_client_base_url(profile) if is_capsule_gateway_profile(profile) else None,
+            "network": network_policy_summary(profile),
             "warnings": sum(1 for message in messages if message["level"] == "warning"),
             "errors": sum(1 for message in messages if message["level"] == "error"),
         })
     return rows
+
+
+@app.get("/network/modes")
+def network_modes() -> list[dict[str, Any]]:
+    return network_mode_descriptors()
+
+
+@app.get("/moe-test-cards")
+def moe_cards() -> list[dict[str, Any]]:
+    return moe_test_cards.list_moe_test_cards()
+
+
+@app.post("/moe-test-cards/{card_id}/preflight")
+def moe_card_preflight(card_id: str) -> dict[str, Any]:
+    try:
+        return moe_test_cards.run_card(card_id, mode="preflight")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="MoE test card not found") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/moe-test-cards/{card_id}/smoke")
+def moe_card_smoke(card_id: str, request: MoeTestSmokeRequest | None = None) -> dict[str, Any]:
+    selected_request = request or MoeTestSmokeRequest()
+    try:
+        return moe_test_cards.run_card(
+            card_id,
+            mode="smoke",
+            approved_prompt_traffic=selected_request.approved_prompt_traffic,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="MoE test card not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/profiles/{profile_id}")
@@ -337,13 +407,26 @@ def validate(profile_id: str) -> list[dict[str, str]]:
 
 @app.post("/profiles/{profile_id}/render")
 def render(profile_id: str) -> dict[str, Any]:
-    command = render_command(profile(profile_id))
-    return {"profile_id": profile_id, "docker_command": command, "shell_command": shlex.join(command)}
+    selected = profile(profile_id)
+    command = render_command(selected)
+    response = {"profile_id": profile_id, "launch_command": command, "shell_command": shlex.join(command)}
+    if is_capsule_gateway_profile(selected):
+        response["process_command"] = command
+        response["client_base_url"] = capsule_client_base_url(selected)
+        response["health_url"] = capsule_healthcheck_url(selected)
+    else:
+        response["docker_command"] = command
+    return response
 
 
 @app.get("/profiles/{profile_id}/moe-probe-manifest")
 def export_moe_probe_manifest(profile_id: str) -> dict[str, Any]:
     return build_moe_probe_manifest(profile(profile_id))
+
+
+@app.get("/profiles/{profile_id}/integration-preview")
+def export_profile_integration_preview(profile_id: str) -> dict[str, Any]:
+    return build_harness_integration_bundle(profile(profile_id), profiles=all_profiles(), runs=run_state.list_runs())
 
 
 @app.get("/cleanup/plan")
@@ -559,8 +642,25 @@ def cleanup_remove_container_result(selected: dict[str, Any], request: CleanupRe
 
 @app.post("/profiles/{profile_id}/health")
 def check_profile_health(profile_id: str) -> dict[str, Any]:
-    url = profile(profile_id)["health"]["url"]
+    url = profile_health_url(profile(profile_id))
     return check_health_url(url)
+
+
+def launch_capsule_gateway_process(selected: dict[str, Any], command: list[str], run: dict[str, Any]) -> dict[str, Any]:
+    cwd = capsule_gateway_cwd(selected)
+    popen = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return run_state.record_process_launch_result(
+        run["run_id"],
+        popen.pid,
+        f"started capsule gateway process pid={popen.pid}",
+        None,
+    ) or run
 
 
 @app.post("/profiles/{profile_id}/launch")
@@ -572,6 +672,18 @@ def launch(profile_id: str) -> dict[str, Any]:
     command = render_command(selected)
     run = run_state.create_run(selected, command)
     try:
+        if is_capsule_gateway_profile(selected):
+            run = launch_capsule_gateway_process(selected, command, run)
+            return {
+                "ok": True,
+                "run_id": run["run_id"],
+                "returncode": 0,
+                "stdout": run.get("launch_stdout"),
+                "stderr": run.get("launch_stderr"),
+                "client_base_url": run.get("client_base_url") or run.get("base_url"),
+                "health_url": run.get("health_url"),
+                "run": run,
+            }
         result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
     except Exception as exc:
         run = run_state.record_launch_exception(run["run_id"], str(exc)) or run
@@ -607,6 +719,123 @@ def run(run_id: str) -> dict[str, Any]:
     return selected
 
 
+def process_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return result.returncode == 0 and str(pid) in result.stdout
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def process_status(selected: dict[str, Any]) -> dict[str, Any]:
+    pid = selected.get("process_pid")
+    if pid is None:
+        return {"managed": False, "pid": None, "running": None}
+    try:
+        parsed_pid = int(pid)
+    except (TypeError, ValueError):
+        return {"managed": True, "pid": pid, "running": False, "error": "invalid_pid"}
+    return {"managed": True, "pid": parsed_pid, "running": process_is_running(parsed_pid)}
+
+
+def terminate_process(pid: int, timeout_seconds: int) -> dict[str, Any]:
+    if not process_is_running(pid):
+        return {"ok": True, "action": "process_already_stopped", "pid": pid, "returncode": 0}
+    if os.name == "nt":
+        result = subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        return {
+            "ok": result.returncode == 0,
+            "action": "process_stopped" if result.returncode == 0 else "process_stop_failed",
+            "pid": pid,
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return {"ok": True, "action": "process_already_stopped", "pid": pid, "returncode": 0}
+    except OSError as exc:
+        return {"ok": False, "action": "process_stop_failed", "pid": pid, "returncode": None, "stderr": str(exc)}
+    return {"ok": True, "action": "process_stopped", "pid": pid, "returncode": 0}
+
+
+@app.get("/runs/{run_id}/status")
+def run_status(run_id: str) -> dict[str, Any]:
+    selected = run(run_id)
+    return {
+        "run_id": selected.get("run_id"),
+        "profile_id": selected.get("profile_id"),
+        "status": selected.get("status"),
+        "service_type": selected.get("service_type"),
+        "process": process_status(selected),
+        "client_base_url": selected.get("client_base_url") or selected.get("base_url"),
+        "health_url": selected.get("health_url"),
+        "last_health_result": selected.get("last_health_result"),
+        "last_stop_result": selected.get("last_stop_result"),
+    }
+
+
+@app.post("/runs/{run_id}/stop")
+def stop_run(run_id: str, request: StopRunRequest | None = None) -> dict[str, Any]:
+    selected = run(run_id)
+    stop_request = request or StopRunRequest()
+    pid = selected.get("process_pid")
+    if pid is not None:
+        try:
+            parsed_pid = int(pid)
+        except (TypeError, ValueError):
+            result = {"ok": False, "action": "refused", "reason": "Run records an invalid process PID.", "pid": pid}
+        else:
+            result = terminate_process(parsed_pid, stop_request.timeout_seconds)
+    else:
+        container_name = str(selected.get("container_name") or "")
+        if not container_name:
+            result = {"ok": False, "action": "refused", "reason": "Run does not record a process PID or container name."}
+        elif not container_name.startswith("dockyard-"):
+            result = {
+                "ok": False,
+                "action": "refused",
+                "reason": "Refusing to stop containers not created by Dockyard.",
+                "container_name": container_name,
+            }
+        else:
+            result = subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True, timeout=30, check=False)
+            result = {
+                "ok": result.returncode == 0,
+                "action": "container_stopped" if result.returncode == 0 else "container_stop_failed",
+                "container_name": container_name,
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+    if stop_request.notes is not None:
+        result["notes"] = stop_request.notes
+    updated = run_state.record_stop_result(run_id, result)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {"stop": updated["last_stop_result"], "run": updated}
+
+
 @app.post("/runs/{run_id}/health")
 def check_run_health(run_id: str) -> dict[str, Any]:
     selected = run(run_id)
@@ -628,6 +857,30 @@ def export_run_moe_probe_manifest(run_id: str) -> dict[str, Any]:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Run profile not found") from exc
     return build_run_moe_probe_manifest(selected_profile, selected)
+
+
+def run_integration_bundle(run_id: str) -> dict[str, Any]:
+    selected = run(run_id)
+    try:
+        selected_profile = load_profile(str(selected["profile_id"]))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Run profile not found") from exc
+    return build_harness_integration_bundle(
+        selected_profile,
+        selected,
+        profiles=all_profiles(),
+        runs=run_state.list_runs(),
+    )
+
+
+@app.get("/runs/{run_id}/integration-bundle")
+def export_run_integration_bundle(run_id: str) -> dict[str, Any]:
+    return run_integration_bundle(run_id)
+
+
+@app.post("/runs/{run_id}/integration-bundle/check")
+def check_run_integration_bundle(run_id: str) -> dict[str, Any]:
+    return check_harness_connectivity(run_integration_bundle(run_id))
 
 
 @app.post("/runs/{run_id}/cleanup")

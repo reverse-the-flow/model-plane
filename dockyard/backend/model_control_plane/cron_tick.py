@@ -68,6 +68,13 @@ def should_moe_probe_plan(run: dict[str, Any]) -> tuple[bool, str]:
     return False, f"status_not_probe_candidate:{status or 'unknown'}"
 
 
+def should_integration_bundle_export(run: dict[str, Any]) -> tuple[bool, str]:
+    latest_health = run.get("last_health_result")
+    if run.get("status") == "healthy" and isinstance(latest_health, dict) and latest_health.get("ok") is True:
+        return True, "run_health_succeeded"
+    return False, f"status_not_integration_candidate:{run.get('status') or 'unknown'}"
+
+
 def profile_job_payload(profile: dict[str, Any], messages: list[dict[str, str]]) -> dict[str, Any]:
     profile_id = str(profile.get("id") or "")
     function_id = "profile.validate"
@@ -110,6 +117,20 @@ def moe_probe_job_payload(run: dict[str, Any], reason: str) -> dict[str, Any]:
         "planner_mode": "plan_or_review_only",
         "reason": reason,
         "next_step": "Export this run-scoped manifest and feed MoE Run Anyway planner in dry-run planning mode.",
+    }
+
+
+def integration_bundle_job_payload(run: dict[str, Any], reason: str) -> dict[str, Any]:
+    run_id = str(run.get("run_id") or "")
+    function_id = "run.integration_bundle.export"
+    return {
+        "function_id": function_id,
+        "call": callable_functions.build_call_descriptor(function_id, {"run_id": run_id}),
+        "api_path": f"/runs/{run_id}/integration-bundle",
+        "command_class": "harness_integration_bundle_export",
+        "planner_mode": "export_only",
+        "reason": reason,
+        "next_step": "Export this bundle for Hermes/OpenClaw config copy or agent handoff; do not write harness config files.",
     }
 
 
@@ -283,6 +304,35 @@ def cron_tick(
             record(job, reused)
         else:
             skipped.append({"kind": "moe_probe_plan", "run_id": run_id, "reason": probe_reason})
+
+        integration_candidate, integration_reason = should_integration_bundle_export(selected)
+        if integration_candidate:
+            job, reused = create_packet(
+                job_type="integration_bundle_export",
+                dedupe_key=f"integration_bundle_export:{run_id}",
+                run_id=run_id,
+                profile_id=selected.get("profile_id"),
+                model_id=selected.get("model_id"),
+                backend_family=selected.get("backend_family"),
+                allowed_actions=[
+                    "inspect_run_state",
+                    "export_harness_integration_bundle",
+                    "record_completion_metadata",
+                ],
+                forbidden_actions=COMMON_FORBIDDEN_ACTIONS
+                + [
+                    "write_harness_config_files",
+                    "modify_hermes_config",
+                    "modify_openclaw_config",
+                    "send_prompt_traffic",
+                    "change_unrelated_services",
+                ],
+                payload=integration_bundle_job_payload(selected, integration_reason),
+                jobs_path=jobs_path,
+            )
+            record(job, reused)
+        else:
+            skipped.append({"kind": "integration_bundle_export", "run_id": run_id, "reason": integration_reason})
 
     return {
         "schema_version": CRON_TICK_SCHEMA_VERSION,

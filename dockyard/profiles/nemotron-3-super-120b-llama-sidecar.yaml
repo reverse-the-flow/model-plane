@@ -1,0 +1,68 @@
+id: nemotron-3-super-120b-llama-sidecar
+name: Nemotron 3 Super 120B llama.cpp Sidecar
+version: 1
+model:
+  id: nemotron-3-super-120b
+  local_path: /mnt/Calliope/models/nemotron-3-super-120b.gguf
+  source: user-staged-gguf
+  quant: gguf
+runtime:
+  backend: llama_cpp
+  image: memory-moe-llama-sidecar:latest
+  command: []
+  args:
+    - -m
+    - /models/nemotron-3-super-120b.gguf
+    - --ctx-size
+    - "256"
+    - --n-gpu-layers
+    - "0"
+    - --no-warmup
+    - --metrics
+    - --slots
+    - --props
+    - --perf
+    - --log-file
+    - /logs/nemotron-3-super-120b.log
+    - --log-prefix
+    - --log-timestamps
+    - --verbosity
+    - "4"
+network:
+  mode: private_trusted_lan
+  bind_host: 0.0.0.0
+  auth: none
+  mdns: true
+  advertise: true
+container:
+  name: dockyard-moe-nemotron-3-super-120b-sidecar
+  host_port: 18082
+  internal_port: 8080
+  gpu: none
+  shm_size: 16gb
+  volumes:
+    - /mnt/Calliope/models:/models:ro
+    - /home/codexlab/model-plane-runtime/logs/llama-cpp:/logs
+    - /home/codexlab/model-plane-runtime/logs/moe-sidecar:/var/log/memory-moe-sidecar
+  env:
+    SIDECAR_LABEL: nemotron-3-super-120b-sidecar-cpu-mmap-baseline
+    SIDECAR_EXTRA_ARGS: --capture-upstream-observability
+health:
+  url: http://127.0.0.1:18082/health
+logs:
+  file_path: /home/codexlab/model-plane-runtime/logs/llama-cpp/nemotron-3-super-120b.log
+  container_path: /logs/nemotron-3-super-120b.log
+moe_probe:
+  primary_probe_hint: passive_sidecar_plus_llama_runtime_probe_high_memory
+  semantic_expert_ids: not_exposed
+  passive_sidecar_requested: true
+  high_memory_candidate: true
+  log_file_path: /home/codexlab/model-plane-runtime/logs/llama-cpp/nemotron-3-super-120b.log
+  container_log_file_path: /logs/nemotron-3-super-120b.log
+  observability_paths:
+    - /metrics
+    - /slots
+    - /props
+    - /perf
+  readiness_paths:
+    - /health

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .profile_types import capsule_client_base_url, is_capsule_gateway_profile, profile_health_url
+
 
 MOE_MANIFEST_SCHEMA_VERSION = "model-plane-moe-probe-manifest-v1"
 LLAMA_CPP_REQUIRED_OBSERVABILITY_PATHS = ["/metrics", "/slots", "/props", "/perf"]
@@ -12,9 +14,11 @@ def normalize_base_url(url: str) -> str:
 
 
 def endpoint_base_url(profile: dict[str, Any]) -> str:
+    if is_capsule_gateway_profile(profile):
+        return capsule_client_base_url(profile)
     health_url = str(profile.get("health", {}).get("url", "")).strip()
     if health_url:
-        for suffix in ("/health", "/v1/models", "/models"):
+        for suffix in ("/health", "/v1/models", "/models", "/api/capsules/status"):
             if health_url.endswith(suffix):
                 return normalize_base_url(health_url[: -len(suffix)])
         return normalize_base_url(health_url)
@@ -32,6 +36,8 @@ def backend_family(profile: dict[str, Any]) -> str:
         "llama.cpp": "llama_cpp",
         "llamacpp": "llama_cpp",
         "llama_cpp": "llama_cpp",
+        "capsule_gateway": "capsule_gateway",
+        "session_capsule_gateway": "capsule_gateway",
         "vllm": "vllm_openai_compatible",
         "ollama": "ollama_openai_compatible",
         "openai": "openai_compatible",
@@ -127,7 +133,8 @@ def build_moe_probe_manifest(profile: dict[str, Any]) -> dict[str, Any]:
         "model_path": model.get("local_path"),
         "backend_family": backend_family(profile),
         "base_url": endpoint_base_url(profile),
-        "health_url": profile.get("health", {}).get("url"),
+        "client_base_url": endpoint_base_url(profile),
+        "health_url": profile_health_url(profile),
         "log_file_path": log_file_path,
         "container_name": container.get("name"),
         "primary_probe_hint": primary_probe_hint(profile),
@@ -153,6 +160,7 @@ def build_moe_probe_manifest(profile: dict[str, Any]) -> dict[str, Any]:
             "Manifest export does not inspect tokens or download models.",
             "Stock llama.cpp, vLLM, Ollama, and OpenAI-compatible telemetry is runtime evidence, not semantic expert ids.",
             "Use the hookable PyTorch path only when hookable_runtime_available is true and router outputs are exposed locally.",
+            "Session Capsule gateway profiles supervise a proxy service; they do not move model weights or live KV tensors into Model Plane.",
         ],
     }
 

@@ -1,0 +1,64 @@
+id: session-capsule-llama-cpp-local
+name: Session Capsule Gateway - local llama.cpp
+profile_type: capsule_gateway
+version: 1
+runtime:
+  backend: capsule_gateway
+  managed_service: process
+source_repository: https://github.com/reverse-the-flow/session-capsule.git
+network:
+  mode: private_trusted_lan
+  bind_host: 0.0.0.0
+  auth: none
+  mdns: true
+  advertise: true
+endpoint:
+  id: local-llama-cpp
+  kind: openai_compatible
+  runtime_profile_id: llama-cpp-example
+  base_url: http://127.0.0.1:18080/v1
+capsule_gateway:
+  repo_path: C:/Users/jpret/Documents/remote/session-capsule
+  state_dir: C:/Users/jpret/Documents/remote/session-capsule-state/local-llama-cpp
+  endpoint_id: local-llama-cpp
+  host: 0.0.0.0
+  port: 8765
+  checkpoint_mode: soft
+  slot: 0
+  default_prefill: user_default
+  healthcheck_url: http://127.0.0.1:8765/api/capsules/status
+  client_base_url: http://127.0.0.1:8765/v1
+  python_command:
+    - py
+    - "-3"
+  fallback_replay: true
+health:
+  url: http://127.0.0.1:8765/api/capsules/status
+service:
+  openai_compatible_base_url: http://127.0.0.1:8765/v1
+  exposed_paths:
+    - /v1/chat/completions
+    - /v1/models
+    - /api/capsules/status
+    - /api/capsules/threads
+    - /api/capsules/checkpoint
+boundary:
+  model_plane_owns:
+    - endpoint registry metadata
+    - capsule gateway launch profile
+    - process lifecycle
+    - health checks
+    - policy and routing metadata
+  capsule_gateway_owns:
+    - OpenAI-compatible request path
+    - thread ledger lookup
+    - capsule restore and checkpoint
+    - transcript diffs
+    - fallback replay
+    - status and checkpoint APIs
+  model_runtime_owns:
+    - model weights
+    - tokenizer and runtime internals
+    - live KV cache
+    - slots
+    - generation
