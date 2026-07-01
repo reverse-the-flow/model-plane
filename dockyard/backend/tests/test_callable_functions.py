@@ -33,6 +33,7 @@ class CallableFunctionsTests(unittest.TestCase):
                 "moe.test_cards.list",
                 "moe.test_card.preflight",
                 "moe.test_card.smoke",
+                "moe.test_card.phase3_capture",
             },
             set(by_id),
         )
@@ -43,12 +44,13 @@ class CallableFunctionsTests(unittest.TestCase):
         self.assertFalse(by_id["run.stop"]["allowed_for_cron"])
         self.assertTrue(by_id["moe.test_card.preflight"]["allowed_for_cron"])
         self.assertFalse(by_id["moe.test_card.smoke"]["allowed_for_cron"])
+        self.assertFalse(by_id["moe.test_card.phase3_capture"]["allowed_for_cron"])
         self.assertTrue(
             all(
                 descriptor["allowed_for_cron"]
                 for function_id, descriptor in by_id.items()
                 if not function_id.startswith("secret.hf_token.")
-                and function_id not in {"run.stop", "moe.test_card.smoke"}
+                and function_id not in {"run.stop", "moe.test_card.smoke", "moe.test_card.phase3_capture"}
             )
         )
         self.assertEqual(by_id["profile.validate"]["path_template"], "/profiles/{profile_id}/validate")
@@ -56,13 +58,18 @@ class CallableFunctionsTests(unittest.TestCase):
         self.assertEqual(by_id["moe.test_cards.list"]["path_template"], "/moe-test-cards")
         self.assertEqual(by_id["moe.test_card.preflight"]["path_template"], "/moe-test-cards/{card_id}/preflight")
         self.assertEqual(by_id["moe.test_card.smoke"]["path_template"], "/moe-test-cards/{card_id}/smoke")
+        self.assertEqual(by_id["moe.test_card.phase3_capture"]["path_template"], "/moe-test-cards/{card_id}/phase3-capture")
         self.assertEqual(by_id["profile.integration_preview.export"]["path_template"], "/profiles/{profile_id}/integration-preview")
         self.assertEqual(by_id["run.integration_bundle.export"]["path_template"], "/runs/{run_id}/integration-bundle")
         self.assertEqual(by_id["run.integration_bundle.check"]["path_template"], "/runs/{run_id}/integration-bundle/check")
         self.assertIn("write_harness_config_files", by_id["run.integration_bundle.export"]["forbidden_actions"])
         self.assertIn("send_prompt_traffic", by_id["run.integration_bundle.check"]["forbidden_actions"])
         self.assertIn("run_unbounded_prompt_suite", by_id["moe.test_card.smoke"]["forbidden_actions"])
+        self.assertIn("write_phase3_artifacts_without_exact_paths", by_id["moe.test_card.phase3_capture"]["forbidden_actions"])
         self.assertEqual(by_id["moe.test_card.smoke"]["default_body"], {"approved_prompt_traffic": False})
+        self.assertFalse(by_id["moe.test_card.phase3_capture"]["default_body"]["approved_phase3_capture"])
+        self.assertFalse(by_id["moe.test_card.phase3_capture"]["default_body"]["execute"])
+        self.assertIsNone(by_id["moe.test_card.phase3_capture"]["default_body"]["request_max_tokens"])
         self.assertEqual(by_id["secret.hf_token.set"]["default_body"], {"token": "", "remember": False})
         self.assertIn("return_secret_values", by_id["secret.hf_token.set"]["forbidden_actions"])
         self.assertIn("persist_secret_values", by_id["secret.hf_token.status"]["forbidden_actions"])

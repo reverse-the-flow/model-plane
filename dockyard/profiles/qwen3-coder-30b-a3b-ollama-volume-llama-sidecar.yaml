@@ -1,0 +1,66 @@
+id: qwen3-coder-30b-a3b-ollama-volume-llama-sidecar
+name: Qwen3 Coder 30B A3B Ollama Volume llama.cpp Sidecar
+version: 1
+model:
+  id: hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q3_K_S
+  local_path: /ollama/models/blobs/sha256-17d51f5310e9a598e5ac914d30f401fb2d1bc3b6a06a846919099eac09364ae1
+  source: ollama-docker-volume
+  source_volume: open-webui_ollama
+  quant: Q3_K_S
+runtime:
+  backend: llama_cpp
+  image: memory-moe-llama-sidecar:latest
+  command: []
+  args:
+    - -m
+    - /ollama/models/blobs/sha256-17d51f5310e9a598e5ac914d30f401fb2d1bc3b6a06a846919099eac09364ae1
+    - --ctx-size
+    - "512"
+    - --n-gpu-layers
+    - "0"
+    - --metrics
+    - --slots
+    - --props
+    - --perf
+    - --log-file
+    - /logs/qwen3-coder-30b-a3b-ollama-volume.log
+    - --log-prefix
+    - --log-timestamps
+    - --verbosity
+    - "4"
+network:
+  mode: local_only
+  bind_host: 127.0.0.1
+  auth: none
+  mdns: false
+  advertise: false
+container:
+  name: dockyard-moe-qwen3-coder-30b-a3b-ollama-volume-sidecar
+  host_port: 18083
+  internal_port: 8080
+  gpu: none
+  shm_size: 16gb
+  volumes:
+    - open-webui_ollama:/ollama:ro
+    - X:/Model Control Systems/model-plane/dockyard/state/logs/llama-cpp:/logs
+  env:
+    SIDECAR_LABEL: qwen3-coder-30b-a3b-ollama-volume-sidecar-cpu-baseline
+    SIDECAR_EXTRA_ARGS: --capture-upstream-observability
+health:
+  url: http://127.0.0.1:18083/health
+logs:
+  file_path: X:/Model Control Systems/model-plane/dockyard/state/logs/llama-cpp/qwen3-coder-30b-a3b-ollama-volume.log
+  container_path: /logs/qwen3-coder-30b-a3b-ollama-volume.log
+moe_probe:
+  primary_probe_hint: passive_sidecar_plus_llama_runtime_probe
+  semantic_expert_ids: not_exposed
+  passive_sidecar_requested: true
+  log_file_path: X:/Model Control Systems/model-plane/dockyard/state/logs/llama-cpp/qwen3-coder-30b-a3b-ollama-volume.log
+  container_log_file_path: /logs/qwen3-coder-30b-a3b-ollama-volume.log
+  observability_paths:
+    - /metrics
+    - /slots
+    - /props
+    - /perf
+  readiness_paths:
+    - /health

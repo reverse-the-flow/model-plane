@@ -22,6 +22,10 @@ function App() {
   const [hfTokenInput, setHfTokenInput] = useState("");
   const [hfTokenRemember, setHfTokenRemember] = useState(false);
   const [hfTokenMessage, setHfTokenMessage] = useState("");
+  const [manualEvidenceCard, setManualEvidenceCard] = useState(null);
+  const [manualEvidenceInput, setManualEvidenceInput] = useState("");
+  const [manualEvidenceNotes, setManualEvidenceNotes] = useState("");
+  const [manualEvidenceMessage, setManualEvidenceMessage] = useState("");
 
   async function refresh() {
     try {
@@ -86,6 +90,64 @@ function App() {
       ...current,
       [cardId]: { ...result, status: res.ok ? "complete" : "failed" },
     }));
+  }
+
+  function manualEvidenceTemplate(card) {
+    const template = {};
+    const fields = card.manual_evidence_schema?.fields || [];
+    fields.forEach((field) => {
+      template[field.name] = field.required ? "" : null;
+    });
+    template.app_runtime = card.runtime_stack || template.app_runtime;
+    template.model_id = card.model && card.model !== "not-applicable" ? card.model : template.model_id;
+    return JSON.stringify(template, null, 2);
+  }
+
+  function openManualEvidence(card) {
+    setManualEvidenceCard(card);
+    setManualEvidenceInput(manualEvidenceTemplate(card));
+    setManualEvidenceNotes("");
+    setManualEvidenceMessage("");
+  }
+
+  function closeManualEvidence() {
+    setManualEvidenceCard(null);
+    setManualEvidenceInput("");
+    setManualEvidenceNotes("");
+    setManualEvidenceMessage("");
+  }
+
+  async function recordManualEvidence(event) {
+    event.preventDefault();
+    if (!manualEvidenceCard) return;
+    setManualEvidenceMessage("");
+    let evidence;
+    try {
+      evidence = JSON.parse(manualEvidenceInput);
+    } catch (error) {
+      setManualEvidenceMessage(`Invalid JSON: ${error.message}`);
+      return;
+    }
+    const res = await fetch(`${API}${manualEvidenceCard.manual_evidence_endpoint}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        approved_manual_evidence: true,
+        evidence,
+        notes: manualEvidenceNotes || null,
+      }),
+    });
+    const result = await res.json();
+    setMoeCardResults((current) => ({
+      ...current,
+      [manualEvidenceCard.card_id]: { ...result, status: res.ok ? "complete" : "failed" },
+    }));
+    if (!res.ok) {
+      setManualEvidenceMessage(result.detail || "Could not record evidence.");
+      return;
+    }
+    setManualEvidenceMessage(`Recorded ${result.run_id}.`);
+    refresh();
   }
 
   async function inspectRun(id) {
@@ -247,7 +309,9 @@ function App() {
         <div className="launch-card-grid">
           {moeCards.map((card) => {
             const result = moeCardResults[card.card_id];
-            const checkoutReady = card.moe_root?.available;
+            const isRunnerCard = card.execution_mode === "runner";
+            const isManualCard = card.execution_mode === "manual_evidence";
+            const checkoutReady = !card.requires_moe_checkout || card.moe_root?.available;
             const smokeCommand = card.smoke_command?.shell_command || "";
             const launchCommand = card.launch_command?.shell_command || "";
             return (
@@ -264,8 +328,11 @@ function App() {
                   <span>{card.base_url}</span>
                   <span>{card.evidence_level}</span>
                   <span>{card.probe_tier}</span>
+                  <span>{card.target_class}</span>
+                  <span>{card.runtime_stack}</span>
+                  <span>{card.execution_mode}</span>
                   {card.profile_id && <span>Profile: {card.profile_id}</span>}
-                  <span>{card.max_prompts} prompt / {card.repeats} repeat</span>
+                  {isRunnerCard && <span>{card.max_prompts} prompt / {card.repeats} repeat</span>}
                 </div>
                 <div className="launch-purpose">{card.purpose}</div>
                 <div className="launch-purpose">{card.hardware_note}</div>
@@ -281,13 +348,28 @@ function App() {
                     {card.expected_artifacts.map((item) => <span key={item}>{item}</span>)}
                   </div>
                 )}
+                {!!card.evidence_limits?.length && (
+                  <div className="launch-list">
+                    <strong>Limits</strong>
+                    {card.evidence_limits.map((item) => <span key={item}>{item}</span>)}
+                  </div>
+                )}
                 <div className="launch-actions">
-                  <button disabled={!checkoutReady} onClick={() => runMoeCard(card.card_id, "preflight")}>
-                    Preflight
-                  </button>
-                  <button disabled={!checkoutReady} onClick={() => runMoeCard(card.card_id, "smoke")}>
-                    Smoke
-                  </button>
+                  {isRunnerCard && (
+                    <button disabled={!checkoutReady} onClick={() => runMoeCard(card.card_id, "preflight")}>
+                      Preflight
+                    </button>
+                  )}
+                  {isRunnerCard && (
+                    <button disabled={!checkoutReady} onClick={() => runMoeCard(card.card_id, "smoke")}>
+                      Smoke
+                    </button>
+                  )}
+                  {isManualCard && (
+                    <button onClick={() => openManualEvidence(card)}>
+                      Record evidence
+                    </button>
+                  )}
                   <button disabled={!launchCommand} onClick={() => copyText(`${card.title} launch`, launchCommand)}>
                     Copy launch
                   </button>
@@ -296,7 +378,11 @@ function App() {
                   </button>
                 </div>
                 <div className="launch-status">
-                  <span>{checkoutReady ? card.moe_root.path : `Set ${card.moe_root?.env_var || "MOE_RUN_ANYWAY_ROOT"}`}</span>
+                  <span>
+                    {isRunnerCard
+                      ? checkoutReady ? card.moe_root.path : `Set ${card.moe_root?.env_var || "MOE_RUN_ANYWAY_ROOT"}`
+                      : `${card.target_class} - ${card.output_dir}`}
+                  </span>
                   {result && (
                     <strong className={result.ok === false ? "bad-text" : result.ok === true ? "ok-text" : ""}>
                       {result.status}
@@ -306,6 +392,9 @@ function App() {
                 </div>
                 {result?.parsed_stdout?.run_dir && (
                   <div className="launch-artifact">{result.parsed_stdout.run_dir}</div>
+                )}
+                {result?.run_dir && (
+                  <div className="launch-artifact">{result.run_dir}</div>
                 )}
                 {result?.stderr && <pre className="small-pre">{result.stderr}</pre>}
               </div>
@@ -337,6 +426,40 @@ function App() {
       </header>
       <section className="status">Backend: {status}</section>
       <MoeLaunchCards />
+      {manualEvidenceCard && (
+        <div className="modal-backdrop" role="presentation">
+          <form className="modal wide-modal" onSubmit={recordManualEvidence}>
+            <div className="modal-title">
+              <div>
+                <p>{manualEvidenceCard.target_class}</p>
+                <h2>{manualEvidenceCard.title}</h2>
+              </div>
+              <button type="button" onClick={closeManualEvidence}>Close</button>
+            </div>
+            <label className="field">
+              <span>Evidence JSON</span>
+              <textarea
+                value={manualEvidenceInput}
+                onChange={(event) => setManualEvidenceInput(event.target.value)}
+                spellCheck="false"
+              />
+            </label>
+            <label className="field">
+              <span>Notes</span>
+              <input
+                value={manualEvidenceNotes}
+                onChange={(event) => setManualEvidenceNotes(event.target.value)}
+                spellCheck="false"
+              />
+            </label>
+            {manualEvidenceMessage && <div className="secret-message">{manualEvidenceMessage}</div>}
+            <div className="actions">
+              <button type="submit">Record</button>
+              <button type="button" onClick={() => copyText("Evidence JSON", manualEvidenceInput)}>Copy JSON</button>
+            </div>
+          </form>
+        </div>
+      )}
       {hfTokenDialogOpen && (
         <div className="modal-backdrop" role="presentation">
           <form className="modal" onSubmit={setHfToken}>

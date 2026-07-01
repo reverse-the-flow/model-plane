@@ -175,6 +175,9 @@ pre {
   background: #1d2023;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
 }
+.wide-modal {
+  width: min(720px, 100%);
+}
 .modal-title {
   display: flex;
   justify-content: space-between;
@@ -214,7 +217,23 @@ input {
   color: #e6e1d8;
   background: #111315;
 }
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 260px;
+  border: 1px solid #555c61;
+  border-radius: 6px;
+  padding: 10px;
+  color: #e6e1d8;
+  background: #111315;
+  resize: vertical;
+  font: 13px ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
 input:focus {
+  outline: none;
+  border-color: #c9a968;
+}
+textarea:focus {
   outline: none;
   border-color: #c9a968;
 }

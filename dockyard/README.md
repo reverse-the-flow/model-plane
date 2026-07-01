@@ -23,7 +23,8 @@ Session Capsule Gateway launch profiles are documented in
 `docs/session-capsule-gateway.md`.
 The local Model Plane helper is documented in
 `docs/model-plane-local-helper.md`. The Capsule Handoff module is documented in
-`docs/capsule-handoff-tray.md`.
+`docs/capsule-handoff-tray.md`. Android edge-device pre-work is documented in
+`docs/android-edge-prework.md`.
 
 ## Agent Orchestration Role
 
@@ -245,6 +246,14 @@ The Ollama cards are deliberately labeled as opaque runtime baselines:
 - `ollama-qwen36-27b`
 - `ollama-gemma4-31b`
 
+Android edge cards are manual evidence tiers, not runnable launch cards. Android
+has no Docker path here; Model Plane does not build apps, install apps, call ADB,
+push model files, or supervise phone runtimes:
+
+- `android-pocketpal-baseline`
+- `android-adb-llama-cpp-baseline`
+- `android-emulator-ui-only`
+
 The backend endpoint is:
 
 ```bash
@@ -279,6 +288,23 @@ These cards produce bounded runtime artifacts. Stock llama.cpp cards can capture
 events when launched through the sidecar image. Ollama/OpenAI-compatible cards
 remain request-boundary baselines. None of these tiers claim semantic expert ids;
 that still requires a hookable local runtime or a llama.cpp/libllama fork.
+
+Android cards use `execution_mode: manual_evidence` and record operator-provided
+measurements through:
+
+```bash
+curl -X POST http://127.0.0.1:19110/moe-test-cards/android-pocketpal-baseline/manual-evidence \
+  -H 'content-type: application/json' \
+  -d '{"approved_manual_evidence":true,"evidence":{"device_label":"screen-repair-phone","dev_path":"external_app","app_runtime":"PocketPal","model_id":"example.gguf"}}'
+```
+
+They write `manifest.json`, `summary.json`, `events.jsonl`, and
+`manual-evidence.json` under `dockyard/state/moe-run-anyway-runs` by default.
+Physical Android devices are required for inference, thermal, battery, and
+sustained-throughput evidence. Emulators are UI/connectivity evidence only.
+Raw Android work, such as ADB, Termux, native llama.cpp builds, and device file
+placement, should stay in a separate dev workflow; Dockyard records only the
+resulting measurements.
 
 ## Harness Integration Bundles
 

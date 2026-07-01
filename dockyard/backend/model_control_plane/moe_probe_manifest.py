@@ -44,8 +44,16 @@ def backend_family(profile: dict[str, Any]) -> str:
         "openai_compatible": "openai_compatible",
         "pytorch": "pytorch_transformers",
         "transformers": "pytorch_transformers",
+        "pocketpal": "android_pocketpal",
+        "android_pocketpal": "android_pocketpal",
+        "android_llama_cpp": "android_llama_cpp",
+        "android_emulator": "android_emulator",
     }
     return aliases.get(backend, backend or "unknown")
+
+
+def is_android_edge_family(family: str) -> bool:
+    return family.startswith("android_")
 
 
 def semantic_expert_ids_status(profile: dict[str, Any]) -> str:
@@ -60,6 +68,8 @@ def semantic_expert_ids_status(profile: dict[str, Any]) -> str:
 
 def primary_probe_hint(profile: dict[str, Any]) -> str:
     moe_probe = profile.get("moe_probe", {})
+    if is_android_edge_family(backend_family(profile)):
+        return "edge_runtime_baseline"
     explicit = moe_probe.get("primary_probe_hint")
     if isinstance(explicit, str) and explicit:
         return explicit
@@ -87,8 +97,11 @@ def observability_paths(profile: dict[str, Any]) -> list[str]:
     configured = moe_probe.get("observability_paths")
     if isinstance(configured, list) and configured:
         return [str(path) for path in configured]
-    if backend_family(profile) == "llama_cpp":
+    family = backend_family(profile)
+    if family == "llama_cpp":
         return list(LLAMA_CPP_REQUIRED_OBSERVABILITY_PATHS)
+    if is_android_edge_family(family):
+        return []
     return ["/props", "/metrics", "/slots"]
 
 
@@ -111,13 +124,15 @@ def build_moe_probe_manifest(profile: dict[str, Any]) -> dict[str, Any]:
     moe_probe = profile.get("moe_probe", {})
     model = profile.get("model", {})
     container = profile.get("container", {})
-    semantic_status = semantic_expert_ids_status(profile)
-    hookable = bool(moe_probe.get("hookable_runtime_available"))
+    family = backend_family(profile)
+    android_edge = is_android_edge_family(family)
+    semantic_status = "not_exposed" if android_edge else semantic_expert_ids_status(profile)
+    hookable = False if android_edge else bool(moe_probe.get("hookable_runtime_available"))
     expected_paths = observability_paths(profile)
     configured_required_paths = moe_probe.get("required_observability_paths")
     required_paths = (
         expected_paths
-        if backend_family(profile) == "llama_cpp"
+        if family == "llama_cpp"
         else [str(path) for path in configured_required_paths]
         if isinstance(configured_required_paths, list)
         else []
@@ -131,7 +146,7 @@ def build_moe_probe_manifest(profile: dict[str, Any]) -> dict[str, Any]:
         "profile_name": profile.get("name"),
         "model_id": model.get("id"),
         "model_path": model.get("local_path"),
-        "backend_family": backend_family(profile),
+        "backend_family": family,
         "base_url": endpoint_base_url(profile),
         "client_base_url": endpoint_base_url(profile),
         "health_url": profile_health_url(profile),
@@ -148,7 +163,7 @@ def build_moe_probe_manifest(profile: dict[str, Any]) -> dict[str, Any]:
             "container_log_file_path": container_log_file_path,
         },
         "runtime_observability": {
-            "kind": "runtime_evidence",
+            "kind": "manual_edge_evidence" if android_edge else "runtime_evidence",
             "expected_paths": expected_paths,
             "required_paths": required_paths,
             "readiness_paths": ready_paths,
@@ -159,6 +174,7 @@ def build_moe_probe_manifest(profile: dict[str, Any]) -> dict[str, Any]:
             "Manifest export does not start containers or model servers.",
             "Manifest export does not inspect tokens or download models.",
             "Stock llama.cpp, vLLM, Ollama, and OpenAI-compatible telemetry is runtime evidence, not semantic expert ids.",
+            "Android edge manifests are manual runtime baselines and never claim semantic expert ids.",
             "Use the hookable PyTorch path only when hookable_runtime_available is true and router outputs are exposed locally.",
             "Session Capsule gateway profiles supervise a proxy service; they do not move model weights or live KV tensors into Model Plane.",
         ],

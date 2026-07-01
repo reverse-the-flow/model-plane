@@ -78,6 +78,28 @@ class MoeProbeManifestTests(unittest.TestCase):
         self.assertEqual(manifest["primary_probe_hint"], "passive_sidecar")
         self.assertEqual(manifest["semantic_expert_ids"], "not_exposed")
 
+    def test_android_edge_manifest_cannot_claim_hookable_expert_ids(self) -> None:
+        manifest = build_moe_probe_manifest(
+            {
+                "id": "android-pocketpal",
+                "name": "Android PocketPal",
+                "model": {"id": "user-selected-gguf"},
+                "runtime": {"backend": "android_pocketpal"},
+                "moe_probe": {
+                    "hookable_runtime_available": True,
+                    "semantic_expert_ids": "claimed",
+                    "observability_paths": [],
+                },
+            }
+        )
+
+        self.assertEqual(manifest["backend_family"], "android_pocketpal")
+        self.assertEqual(manifest["primary_probe_hint"], "edge_runtime_baseline")
+        self.assertEqual(manifest["semantic_expert_ids"], "not_exposed")
+        self.assertFalse(manifest["hookable_runtime_available"])
+        self.assertEqual(manifest["observability_paths"], [])
+        self.assertEqual(manifest["runtime_observability"]["kind"], "manual_edge_evidence")
+
 
 if __name__ == "__main__":
     unittest.main()

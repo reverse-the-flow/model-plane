@@ -51,6 +51,28 @@ class ProfileValidationTests(unittest.TestCase):
         self.assertNotIn("llama_cpp_moe_log_file", codes)
         self.assertNotIn("llama_cpp_moe_observability_paths", codes)
 
+    def test_docker_volume_model_sources_skip_host_path_warning(self) -> None:
+        profile = llama_profile(
+            args=["--metrics", "--slots", "--props", "--perf", "--log-file", "/logs/model.log"],
+            extra={
+                "model": {
+                    "id": "local/ollama-volume-model",
+                    "local_path": "/ollama/models/blobs/sha256-model",
+                    "source": "ollama-docker-volume",
+                },
+                "logs": {"file_path": "X:/Model Control Systems/model-plane/dockyard/state/logs/model.log"},
+                "moe_probe": {
+                    "observability_paths": ["/metrics", "/slots", "/props", "/perf"],
+                    "log_file_path": "X:/Model Control Systems/model-plane/dockyard/state/logs/model.log",
+                },
+            },
+        )
+
+        messages = app_module.validate_profile(profile)
+        codes = {message["code"] for message in messages}
+
+        self.assertNotIn("model_path", codes)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -47,6 +47,7 @@ CLEANUP_CANDIDATE_STATUSES = {"launch_failed", "launch_error", "unhealthy"}
 DEFAULT_STALE_LAUNCHING_SECONDS = 30 * 60
 LLAMA_CPP_MOE_OBSERVABILITY_FLAGS = ("--metrics", "--slots", "--props", "--perf")
 LLAMA_CPP_LOG_FILE_FLAGS = ("--log-file", "--log-file-path")
+DOCKER_VOLUME_MODEL_SOURCES = {"docker-volume", "ollama-docker-volume"}
 
 
 class CleanupRequest(BaseModel):
@@ -75,6 +76,28 @@ class HfTokenRequest(BaseModel):
 
 class MoeTestSmokeRequest(BaseModel):
     approved_prompt_traffic: bool = False
+
+
+class MoeManualEvidenceRequest(BaseModel):
+    approved_manual_evidence: bool = False
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    notes: str | None = None
+
+
+class MoePhase3CaptureRequest(BaseModel):
+    approved_phase3_capture: bool = False
+    approved_prompt_traffic: bool = False
+    execute: bool = False
+    request_max_tokens: int | None = None
+    runtime_capture_request_path: str = ""
+    artifact_id: str = ""
+    capture_kind: str = ""
+    receipt_kind: str = ""
+    prompt_set_path: str = ""
+    artifact_output_path: str = ""
+    receipt_output_path: str = ""
+    approval_keys: list[str] = Field(default_factory=list)
+    notes: str | None = None
 
 
 class HfTokenStatus(BaseModel):
@@ -211,12 +234,13 @@ def validate_profile(profile: dict[str, Any]) -> list[dict[str, str]]:
     image = profile.get("runtime", {}).get("image", "")
     name = profile.get("container", {}).get("name", "")
     model_path = profile.get("model", {}).get("local_path")
+    model_source = str(profile.get("model", {}).get("source") or "").strip().lower()
     args = " ".join(str(arg) for arg in profile.get("runtime", {}).get("args", []))
     if not name.startswith("dockyard-"):
         messages.append({"level": "error", "code": "container_name", "message": "Container name must start with dockyard-."})
     if image.endswith(":latest"):
         messages.append({"level": "warning", "code": "latest", "message": "Image uses latest; pin an exact tag."})
-    if model_path:
+    if model_path and model_source not in DOCKER_VOLUME_MODEL_SOURCES:
         try:
             exists = Path(model_path).exists()
         except OSError as exc:
@@ -371,6 +395,8 @@ def moe_card_preflight(card_id: str) -> dict[str, Any]:
         return moe_test_cards.run_card(card_id, mode="preflight")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="MoE test card not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -390,6 +416,40 @@ def moe_card_smoke(card_id: str, request: MoeTestSmokeRequest | None = None) -> 
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/moe-test-cards/{card_id}/manual-evidence")
+def moe_card_manual_evidence(card_id: str, request: MoeManualEvidenceRequest | None = None) -> dict[str, Any]:
+    selected_request = request or MoeManualEvidenceRequest()
+    try:
+        return moe_test_cards.record_manual_evidence(
+            card_id,
+            selected_request.evidence,
+            approved_manual_evidence=selected_request.approved_manual_evidence,
+            notes=selected_request.notes,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="MoE test card not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not write manual evidence artifact: {exc}") from exc
+
+
+@app.post("/moe-test-cards/{card_id}/phase3-capture")
+def moe_card_phase3_capture(card_id: str, request: MoePhase3CaptureRequest | None = None) -> dict[str, Any]:
+    selected_request = request or MoePhase3CaptureRequest()
+    payload = selected_request.model_dump() if hasattr(selected_request, "model_dump") else selected_request.dict()
+    try:
+        return moe_test_cards.plan_phase3_artifact_capture(card_id, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="MoE test card not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/profiles/{profile_id}")

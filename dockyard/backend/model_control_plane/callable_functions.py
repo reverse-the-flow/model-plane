@@ -40,6 +40,14 @@ MOE_SMOKE_FORBIDDEN_ACTIONS = COMMON_FORBIDDEN_ACTIONS + [
     "run_unbounded_prompt_suite",
 ]
 
+MOE_PHASE3_CAPTURE_FORBIDDEN_ACTIONS = COMMON_FORBIDDEN_ACTIONS + [
+    "write_phase3_artifacts_without_exact_paths",
+    "write_phase3_receipts_without_exact_paths",
+    "send_prompt_traffic_without_explicit_phase3_approval",
+    "claim_runtime_execution_ready_without_writer",
+    "claim_live_expert_paging",
+]
+
 FUNCTION_CATALOG: dict[str, FunctionDescriptor] = {
     "secret.hf_token.clear": {
         "function_id": "secret.hf_token.clear",
@@ -122,6 +130,31 @@ FUNCTION_CATALOG: dict[str, FunctionDescriptor] = {
         "allowed_for_cron": False,
         "forbidden_actions": MOE_SMOKE_FORBIDDEN_ACTIONS,
         "default_body": {"approved_prompt_traffic": False},
+    },
+    "moe.test_card.phase3_capture": {
+        "function_id": "moe.test_card.phase3_capture",
+        "description": "Validate a guarded Phase 3 artifact-capture request for one MoE test card, requiring exact artifact and receipt paths before runtime execution is implemented.",
+        "method": "POST",
+        "path_template": "/moe-test-cards/{card_id}/phase3-capture",
+        "side_effect": "phase3_capture_contract_validation_runtime_execution_pending",
+        "required_fields": ["card_id"],
+        "allowed_for_cron": False,
+        "forbidden_actions": MOE_PHASE3_CAPTURE_FORBIDDEN_ACTIONS,
+        "default_body": {
+            "approved_phase3_capture": False,
+            "approved_prompt_traffic": False,
+            "execute": False,
+            "request_max_tokens": None,
+            "runtime_capture_request_path": "",
+            "artifact_id": "",
+            "capture_kind": "",
+            "receipt_kind": "",
+            "prompt_set_path": "",
+            "artifact_output_path": "",
+            "receipt_output_path": "",
+            "approval_keys": [],
+            "notes": None,
+        },
     },
     "profile.integration_preview.export": {
         "function_id": "profile.integration_preview.export",
