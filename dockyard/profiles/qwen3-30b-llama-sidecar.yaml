@@ -17,7 +17,6 @@ runtime:
     - "512"
     - --n-gpu-layers
     - "0"
-    - --no-mmap
     - --metrics
     - --slots
     - --props
@@ -45,7 +44,7 @@ container:
     - /home/codexlab/model-plane-runtime/logs/llama-cpp:/logs
     - /home/codexlab/model-plane-runtime/logs/moe-sidecar:/var/log/memory-moe-sidecar
   env:
-    SIDECAR_LABEL: qwen3-30b-sidecar-cpu-baseline
+    SIDECAR_LABEL: qwen3-30b-sidecar-cpu-mmap-baseline
     SIDECAR_EXTRA_ARGS: --capture-upstream-observability
 health:
   url: http://127.0.0.1:18081/health

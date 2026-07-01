@@ -10,7 +10,7 @@ model:
 runtime:
   backend: vllm
   image: vllm/vllm-openai:v0.20.0
-  command: [vllm, serve]
+  command: []
   args:
     - /model
     - --served-model-name
@@ -24,6 +24,8 @@ runtime:
     - modelopt
     - --max-model-len
     - "32768"
+    - --max-num-batched-tokens
+    - "4096"
     - --gpu-memory-utilization
     - "0.92"
 network:
