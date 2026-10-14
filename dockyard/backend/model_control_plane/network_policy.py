@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import re
 import socket
 from typing import Any
@@ -32,11 +33,30 @@ def default_mdns_host() -> str:
 def network_bind_host(profile: dict[str, Any]) -> str:
     configured = network_config(profile)
     if configured.get("bind_host"):
-        return str(configured["bind_host"])
+        host = str(configured["bind_host"])
+        if network_mode(profile) == "local_only":
+            host = host.strip()
+            # Docker port publication requires an IP; do not resolve localhost via DNS.
+            if host.lower() == "localhost":
+                return "127.0.0.1"
+        return host
     mode = network_mode(profile)
     if mode == "local_only":
         return "127.0.0.1"
     return "0.0.0.0"
+
+
+def is_loopback_bind_host(value: Any) -> bool:
+    """Accept loopback literals and localhost without consulting DNS."""
+    if not isinstance(value, str):
+        return False
+    host = value.strip()
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def network_auth(profile: dict[str, Any]) -> str:
@@ -69,17 +89,22 @@ def advertised_host(profile: dict[str, Any]) -> str:
             return str(configured[key])
     mode = network_mode(profile)
     if mode == "local_only":
-        return "127.0.0.1"
+        host = network_bind_host(profile)
+        return host if is_loopback_bind_host(host) else "127.0.0.1"
     return default_mdns_host()
+
+
+def url_host(host: str) -> str:
+    return f"[{host}]" if ":" in host and not host.startswith("[") else host
 
 
 def url_with_host(url: str, host: str) -> str:
     parsed = urlparse(url)
     if not parsed.scheme or not parsed.netloc:
         return url
-    netloc = host
+    netloc = url_host(host)
     if parsed.port:
-        netloc = f"{host}:{parsed.port}"
+        netloc = f"{netloc}:{parsed.port}"
     return urlunparse(parsed._replace(netloc=netloc))
 
 
@@ -96,7 +121,7 @@ def url_for_port(profile: dict[str, Any], port: int | str | None, path: str = ""
     if port in (None, ""):
         return ""
     suffix = path if path.startswith("/") or not path else f"/{path}"
-    return f"http://{advertised_host(profile)}:{port}{suffix}"
+    return f"http://{url_host(advertised_host(profile))}:{port}{suffix}"
 
 
 def local_url_for_port(port: int | str | None, path: str = "") -> str:
@@ -116,7 +141,7 @@ def network_policy_summary(profile: dict[str, Any]) -> dict[str, Any]:
     if mode == "private_trusted_lan":
         notes.append("Private trusted LAN mode binds to 0.0.0.0 with no auth and advertises a .local host.")
     elif mode == "local_only":
-        notes.append("Local-only mode binds to 127.0.0.1 and expects SSH tunnels for remote clients.")
+        notes.append("Local-only mode requires a loopback bind (default 127.0.0.1) and expects SSH tunnels for remote clients.")
     else:
         notes.append("Secured remote mode is reserved for token/Tailscale/TLS-style hardening.")
     return {
@@ -144,6 +169,16 @@ def validate_network_policy(profile: dict[str, Any]) -> list[dict[str, str]]:
         })
         return messages
     mode = network_mode(profile)
+    if mode == "local_only":
+        bind_host = configured.get("bind_host")
+        # Missing/null/empty overrides keep the loopback default. Other values
+        # must be explicit loopback addresses, including false-y YAML scalars.
+        if bind_host not in (None, "") and not is_loopback_bind_host(bind_host):
+            messages.append({
+                "level": "error",
+                "code": "network_local_only_bind_host",
+                "message": "network.mode local_only requires network.bind_host to be a loopback IP (127.0.0.0/8 or ::1) or localhost; remove the override to use 127.0.0.1.",
+            })
     if mode == "private_trusted_lan" and network_auth(profile) != "none":
         messages.append({
             "level": "warning",

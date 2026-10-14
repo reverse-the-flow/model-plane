@@ -263,6 +263,9 @@ def validate_profile(profile: dict[str, Any]) -> list[dict[str, str]]:
 def render_command(profile: dict[str, Any]) -> list[str]:
     if is_capsule_gateway_profile(profile):
         return render_capsule_gateway_command(profile)
+    errors = [message for message in validate_network_policy(profile) if message["level"] == "error"]
+    if errors:
+        raise ValueError(" ".join(message["message"] for message in errors))
     runtime = profile["runtime"]
     container = profile["container"]
     command = [
@@ -273,7 +276,10 @@ def render_command(profile: dict[str, Any]) -> list[str]:
     gpu_value = "" if gpu is None else str(gpu).strip()
     if gpu_value and gpu_value.lower() not in {"none", "false", "0"}:
         command += ["--gpus", gpu_value]
-    command += ["-p", f"{network_bind_host(profile)}:{container['host_port']}:{container['internal_port']}"]
+    bind_host = network_bind_host(profile)
+    if ":" in bind_host and not bind_host.startswith("["):
+        bind_host = f"[{bind_host}]"
+    command += ["-p", f"{bind_host}:{container['host_port']}:{container['internal_port']}"]
     if container.get("shm_size"):
         command += ["--shm-size", str(container["shm_size"])]
     for key, value in container.get("env", {}).items():
@@ -408,7 +414,11 @@ def validate(profile_id: str) -> list[dict[str, str]]:
 @app.post("/profiles/{profile_id}/render")
 def render(profile_id: str) -> dict[str, Any]:
     selected = profile(profile_id)
-    command = render_command(selected)
+    try:
+        command = render_command(selected)
+    except ValueError as exc:
+        errors = [message for message in validate_profile(selected) if message["level"] == "error"]
+        raise HTTPException(status_code=400, detail=errors or str(exc)) from exc
     response = {"profile_id": profile_id, "launch_command": command, "shell_command": shlex.join(command)}
     if is_capsule_gateway_profile(selected):
         response["process_command"] = command

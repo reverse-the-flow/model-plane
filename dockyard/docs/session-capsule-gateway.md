@@ -85,6 +85,15 @@ clients. Use `network.mode: local_only` to bind to `127.0.0.1` for single-PC or
 SSH-tunnel use. `network.mode: secured_remote` is reserved for future
 token/Tailscale/TLS-style hardening.
 
+The top-level `network.bind_host` determines the rendered `--host`; the legacy
+required `capsule_gateway.host` does not override it. Under `local_only`, both
+fields must be loopback when supplied (`127.0.0.0/8`, `::1`, or `localhost`).
+Remove a stale `network.bind_host: 0.0.0.0` to use the default `127.0.0.1`, and
+change `capsule_gateway.host: 0.0.0.0` to `127.0.0.1` when converting the example
+profile. Wildcard IPv4/IPv6 and non-loopback settings are errors, not warnings;
+rendering and launching are blocked. `localhost` becomes `127.0.0.1` without a
+DNS lookup. Trusted-LAN profiles retain their all-interface defaults.
+
 The health check should point at `/api/capsules/status`, and `client_base_url`
 should point at the OpenAI-compatible `/v1` base URL. Health checks stay on the
 explicit configured URL so Model Plane can probe the local supervisor path.

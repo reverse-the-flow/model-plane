@@ -63,12 +63,52 @@ agents. Set `network.mode: local_only` when the model should stay on the current
 machine or behind an SSH tunnel. `network.mode: secured_remote` is kept as a
 future hardening target rather than pretending v1 has enterprise security.
 
+`local_only` defaults to `127.0.0.1`. An explicit `network.bind_host` must be
+a numeric IPv4 loopback address in `127.0.0.0/8`, the IPv6 loopback address
+`::1` (including its expanded form), or `localhost`. `localhost` is normalized
+to `127.0.0.1` without DNS lookup; IPv6 literals are supplied without brackets
+in profiles and bracketed automatically in Docker port mappings. Omitted,
+null, or empty bind overrides keep the default. Wildcards (`0.0.0.0`, `::`),
+LAN/public addresses, other hostnames, and malformed values are validation
+errors under `local_only`. Validation and command rendering enforce this for
+both Docker runtimes and capsule gateways; render/launch API requests return
+HTTP 400 and launch creates no run or process when the policy is invalid.
+
+For capsule profiles, `network.bind_host` controls the actual `--host` argument.
+The required legacy `capsule_gateway.host` field must also be loopback under
+`local_only`; a stale all-interface value is an error even though it does not
+override the network block. When converting a trusted-LAN profile, remove or
+replace its `network.bind_host: 0.0.0.0` and update `capsule_gateway.host` if
+present. These restrictions apply only to `local_only`; trusted-LAN mode keeps
+its all-interface, no-auth defaults.
+
+Profile network policy controls launched model/gateway listeners. The Model
+Plane backend and frontend have separate listener settings; profile validation
+does not change those listeners or verify an already-running service's network
+exposure. Local-only generated client URLs follow the selected loopback bind
+unless `network.advertise_host` overrides it; IPv6 URLs use brackets. The
+local-only summary's SSH example uses the default IPv4 loopback; adjust the
+tunnel target and explicit health/client URLs if selecting a different address.
+
 The useful middle tier is not an auth gateway. It is a repo-visible version of
 the low-friction node companion pattern: discover a home NVIDIA/local-runtime
 node, launch or supervise the runtime, advertise the LAN endpoint, export
 OpenAI-compatible harness bundles, and hand off capsules. That is intentionally
 easy to run on a private network. People who want a hardened gateway can add one
 around these endpoints without Model Plane owning that complexity in v1.
+
+## Regression tests
+
+From the repository root, install `dockyard/backend/requirements.txt` into your
+Python environment, then run:
+
+```bash
+PYTHONPATH=dockyard/backend python -m unittest discover -s dockyard/backend/tests -v
+```
+
+The network-policy regressions validate profiles, rendered commands, and API
+rejection before side effects. Docker and capsule process launches are mocked;
+these tests do not verify live socket binding, firewall rules, or remote access.
 
 ## NVIDIA Sync Custom App
 

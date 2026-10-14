@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .network_policy import (
+    is_loopback_bind_host,
     local_url_for_port,
     network_bind_host,
     network_mode,
@@ -17,7 +18,6 @@ from .network_policy import (
 
 CAPSULE_GATEWAY_BACKENDS = {"capsule_gateway", "session_capsule_gateway"}
 CAPSULE_CHECKPOINT_MODES = {"soft", "hard", "none"}
-LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def runtime_backend(profile: dict[str, Any]) -> str:
@@ -121,6 +121,9 @@ def capsule_python_command(profile: dict[str, Any]) -> list[str]:
 
 
 def render_capsule_gateway_command(profile: dict[str, Any]) -> list[str]:
+    errors = [message for message in validate_capsule_gateway_network_policy(profile) if message["level"] == "error"]
+    if errors:
+        raise ValueError(" ".join(message["message"] for message in errors))
     capsule = capsule_gateway_config(profile)
     script_path = capsule_gateway_script_path(profile)
     if script_path is None:
@@ -146,13 +149,26 @@ def render_capsule_gateway_command(profile: dict[str, Any]) -> list[str]:
     return command
 
 
-def validate_capsule_gateway_profile(profile: dict[str, Any]) -> list[dict[str, str]]:
+def validate_capsule_gateway_network_policy(profile: dict[str, Any]) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = validate_network_policy(profile)
+    legacy_host = capsule_gateway_config(profile).get("host")
+    if network_mode(profile) == "local_only" and legacy_host not in (None, "") and not is_loopback_bind_host(legacy_host):
+        messages.append({
+            "level": "error",
+            "code": "capsule_gateway_host",
+            "message": "network.mode local_only requires capsule_gateway.host to be loopback too; network.bind_host controls the actual gateway bind.",
+        })
+    return messages
+
+
+def validate_capsule_gateway_profile(profile: dict[str, Any]) -> list[dict[str, str]]:
+    messages = validate_capsule_gateway_network_policy(profile)
     capsule = capsule_gateway_config(profile)
     if not profile.get("name"):
         messages.append({"level": "error", "code": "name", "message": "Capsule gateway profile must set name."})
     if not capsule:
-        return [{"level": "error", "code": "capsule_gateway", "message": "Capsule gateway profile must include capsule_gateway settings."}]
+        messages.append({"level": "error", "code": "capsule_gateway", "message": "Capsule gateway profile must include capsule_gateway settings."})
+        return messages
     if not capsule.get("repo_path") and not capsule.get("executable_path"):
         messages.append({
             "level": "error",
@@ -191,13 +207,6 @@ def validate_capsule_gateway_profile(profile: dict[str, Any]) -> list[dict[str, 
         int(capsule.get("slot"))
     except (TypeError, ValueError):
         messages.append({"level": "error", "code": "capsule_gateway_slot", "message": "slot must be an integer runtime slot id."})
-    host = capsule_host(profile)
-    if network_mode(profile) == "local_only" and host not in LOCALHOST_HOSTS:
-        messages.append({
-            "level": "warning",
-            "code": "capsule_gateway_host",
-            "message": "Local-only capsule gateway profiles should bind to localhost.",
-        })
     health_url = str(capsule.get("healthcheck_url") or "")
     if health_url and not health_url.rstrip("/").endswith("/api/capsules/status"):
         messages.append({
