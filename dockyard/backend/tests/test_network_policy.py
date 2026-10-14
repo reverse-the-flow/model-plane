@@ -3,9 +3,11 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
+from fastapi.testclient import TestClient
+
 from model_control_plane import app as app_module
 from model_control_plane.harness_integrations import build_harness_integration_bundle
-from model_control_plane.network_policy import network_policy_summary, rewrite_local_url_for_policy
+from model_control_plane.network_policy import network_policy_summary, rewrite_local_url_for_policy, url_for_port
 from model_control_plane.profile_types import capsule_client_base_url, capsule_healthcheck_url, render_capsule_gateway_command
 
 
@@ -52,6 +54,164 @@ def capsule_profile() -> dict:
 
 
 class NetworkPolicyTests(unittest.TestCase):
+    def assert_policy_rejected(self, selected: dict, code: str) -> None:
+        errors = [message for message in app_module.validate_profile(selected) if message["level"] == "error"]
+        self.assertIn(code, {message["code"] for message in errors})
+        with self.assertRaisesRegex(ValueError, "local_only"):
+            app_module.render_command(selected)
+        if selected.get("profile_type") == "capsule_gateway":
+            with self.assertRaisesRegex(ValueError, "local_only"):
+                render_capsule_gateway_command(selected)
+
+        with (
+            mock.patch.object(app_module, "load_profile", return_value=selected),
+            mock.patch.object(app_module.run_state, "create_run") as create_run,
+            mock.patch.object(app_module.subprocess, "run") as docker_run,
+            mock.patch.object(app_module.subprocess, "Popen") as popen,
+        ):
+            client = TestClient(app_module.app)
+            validation = client.post(f"/profiles/{selected['id']}/validate")
+            self.assertEqual(validation.status_code, 200)
+            self.assertIn(code, {message["code"] for message in validation.json()})
+            for action in ("render", "launch"):
+                response = client.post(f"/profiles/{selected['id']}/{action}")
+                self.assertEqual(response.status_code, 400, response.text)
+                self.assertIn(code, {message["code"] for message in response.json()["detail"]})
+            create_run.assert_not_called()
+            docker_run.assert_not_called()
+            popen.assert_not_called()
+
+    def test_local_only_rejects_non_loopback_binds_for_both_profile_types(self) -> None:
+        for factory in (profile, capsule_profile):
+            for host in (
+                "0.0.0.0", "::", "0:0:0:0:0:0:0:0", "[::]", "192.168.1.50", "2001:db8::1",
+                "host.docker.internal", "model-plane.local", "127.0.0.1.example", "127.1", "[::1]",
+                "::ffff:192.168.1.50", " ", 0, False,
+            ):
+                with self.subTest(factory=factory.__name__, host=host):
+                    selected = factory()
+                    selected["network"] = {"mode": "local_only", "bind_host": host}
+                    if factory is capsule_profile:
+                        selected["capsule_gateway"]["host"] = "127.0.0.1"
+                    self.assert_policy_rejected(selected, "network_local_only_bind_host")
+
+    def test_local_only_accepts_defaults_and_explicit_loopback_binds(self) -> None:
+        for host, resolved, publication in (
+            (None, "127.0.0.1", "127.0.0.1:18080:8080"),
+            ("", "127.0.0.1", "127.0.0.1:18080:8080"),
+            ("127.0.0.1", "127.0.0.1", "127.0.0.1:18080:8080"),
+            ("127.23.4.5", "127.23.4.5", "127.23.4.5:18080:8080"),
+            ("localhost", "127.0.0.1", "127.0.0.1:18080:8080"),
+            (" LOCALHOST ", "127.0.0.1", "127.0.0.1:18080:8080"),
+            ("::1", "::1", "[::1]:18080:8080"),
+            ("0:0:0:0:0:0:0:1", "0:0:0:0:0:0:0:1", "[0:0:0:0:0:0:0:1]:18080:8080"),
+        ):
+            for factory in (profile, capsule_profile):
+                with self.subTest(factory=factory.__name__, host=host):
+                    selected = factory()
+                    selected["network"] = {"mode": "local_only", "bind_host": host}
+                    if factory is capsule_profile:
+                        selected["capsule_gateway"]["host"] = resolved
+                    errors = [message for message in app_module.validate_profile(selected) if message["level"] == "error"]
+                    self.assertEqual(errors, [])
+                    command = app_module.render_command(selected)
+                    self.assertEqual(network_policy_summary(selected)["bind_host"], resolved)
+                    if factory is capsule_profile:
+                        self.assertEqual(command[command.index("--host") + 1], resolved)
+                    else:
+                        self.assertEqual(command[command.index("-p") + 1], publication)
+
+    def test_local_only_rejects_conflicting_legacy_capsule_host(self) -> None:
+        for bind_host in (None, "127.0.0.1", "::1"):
+            for host in ("0.0.0.0", "::", "192.168.1.50", "2001:db8::1"):
+                with self.subTest(bind_host=bind_host, host=host):
+                    selected = capsule_profile()
+                    selected["network"] = {"mode": "local_only", "bind_host": bind_host}
+                    selected["capsule_gateway"]["host"] = host
+                    self.assert_policy_rejected(selected, "capsule_gateway_host")
+
+    def test_explicit_loopback_client_urls_follow_the_selected_bind(self) -> None:
+        for host, url in (("127.23.4.5", "http://127.23.4.5:8765/v1"), ("::1", "http://[::1]:8765/v1")):
+            with self.subTest(host=host):
+                selected = capsule_profile()
+                selected["network"] = {"mode": "local_only", "bind_host": host}
+                selected["capsule_gateway"]["host"] = host
+                self.assertEqual(capsule_client_base_url(selected), url)
+                self.assertEqual(url_for_port(selected, 8765, "/v1"), url)
+                self.assertEqual(rewrite_local_url_for_policy(selected, "http://[::1]:8765/v1"), url)
+                selected["capsule_gateway"].pop("client_base_url")
+                self.assertEqual(capsule_client_base_url(selected), url)
+
+    def test_capsule_network_errors_survive_missing_capsule_settings(self) -> None:
+        selected = capsule_profile()
+        selected.pop("capsule_gateway")
+        selected["network"] = {"mode": "local_only", "bind_host": "0.0.0.0"}
+        codes = {message["code"] for message in app_module.validate_profile(selected)}
+        self.assertIn("network_local_only_bind_host", codes)
+        self.assertIn("capsule_gateway", codes)
+
+    def test_valid_local_and_trusted_lan_policies_reach_expected_launchers(self) -> None:
+        for mode, host, resolved in (
+            ("local_only", None, "127.0.0.1"),
+            (" LOCAL_ONLY ", "localhost", "127.0.0.1"),
+            ("local_only", "::1", "::1"),
+            ("private_trusted_lan", None, "0.0.0.0"),
+            ("private_trusted_lan", "::", "::"),
+        ):
+            for factory in (profile, capsule_profile):
+                with self.subTest(mode=mode, host=host, factory=factory.__name__):
+                    selected = factory()
+                    selected["network"] = {"mode": mode, "bind_host": host}
+                    selected_run = {"run_id": "test-run", "status": "launched"}
+                    if factory is capsule_profile and mode.strip().lower() == "local_only":
+                        selected["capsule_gateway"]["host"] = resolved
+                    with (
+                        mock.patch.object(app_module, "load_profile", return_value=selected),
+                        mock.patch.object(app_module.run_state, "create_run", return_value=selected_run) as create_run,
+                        mock.patch.object(app_module.run_state, "record_launch_result", return_value=selected_run),
+                        mock.patch.object(app_module.run_state, "record_process_launch_result", return_value=selected_run),
+                        mock.patch.object(app_module.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="id", stderr="")) as docker_run,
+                        mock.patch.object(app_module.subprocess, "Popen", return_value=mock.Mock(pid=4321)) as popen,
+                    ):
+                        response = TestClient(app_module.app).post(f"/profiles/{selected['id']}/launch")
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertTrue(response.json()["ok"])
+                    create_run.assert_called_once()
+                    if factory is capsule_profile:
+                        popen.assert_called_once()
+                        docker_run.assert_not_called()
+                        command = popen.call_args.args[0]
+                        self.assertEqual(command[command.index("--host") + 1], resolved)
+                    else:
+                        docker_run.assert_called_once()
+                        popen.assert_not_called()
+                        command = docker_run.call_args.args[0]
+                        published_host = f"[{resolved}]" if ":" in resolved else resolved
+                        self.assertEqual(command[command.index("-p") + 1], f"{published_host}:18080:8080")
+
+    def test_trusted_lan_accepts_default_and_explicit_non_loopback_binds(self) -> None:
+        for mode in (None, "private_trusted_lan"):
+            for host, resolved in ((None, "0.0.0.0"), ("0.0.0.0", "0.0.0.0"), ("::", "::"), ("192.168.1.50", "192.168.1.50")):
+                for factory in (profile, capsule_profile):
+                    with self.subTest(mode=mode, host=host, factory=factory.__name__):
+                        selected = factory()
+                        selected["network"] = {"bind_host": host}
+                        if mode:
+                            selected["network"]["mode"] = mode
+                        errors = [message for message in app_module.validate_profile(selected) if message["level"] == "error"]
+                        self.assertEqual(errors, [])
+                        summary = network_policy_summary(selected)
+                        self.assertEqual(summary["bind_host"], resolved)
+                        self.assertEqual(summary["auth"], "none")
+                        self.assertTrue(summary["mdns"])
+                        self.assertTrue(summary["advertise"])
+                        command = app_module.render_command(selected)
+                        if factory is capsule_profile:
+                            self.assertEqual(command[command.index("--host") + 1], resolved)
+                        else:
+                            published_host = f"[{resolved}]" if ":" in resolved else resolved
+                            self.assertEqual(command[command.index("-p") + 1], f"{published_host}:18080:8080")
+
     def test_default_network_policy_is_private_trusted_lan(self) -> None:
         with mock.patch("model_control_plane.network_policy.socket.gethostname", return_value="Kitchen GX10"):
             summary = network_policy_summary(profile())
